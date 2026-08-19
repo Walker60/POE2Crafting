@@ -13,8 +13,9 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from poe2craft.data.loader import GameData, load_gamedata
+from poe2craft.pricing.settings_store import TradeSettingsStore
 from poe2craft.solver.parallel import health_check, make_executor
-from poe2craft.web import catalog, crafting
+from poe2craft.web import catalog, crafting, trade_settings
 from poe2craft.web.session import SessionStore
 
 FRONTEND_DIST = Path(__file__).resolve().parents[3] / "frontend" / "dist"
@@ -39,6 +40,7 @@ def create_app(
     gamedata_path: Path | None = None,
     gamedata: GameData | None = None,
     n_pool_workers: int | None = None,
+    trade_settings_path: Path | None = None,
 ) -> FastAPI:
     """`gamedata`, if given, is used directly (e.g. a small hand-built
     fixture in tests) -- otherwise loads from `gamedata_path` (or its default,
@@ -67,6 +69,11 @@ def create_app(
         gamedata = load_gamedata(gamedata_path)
     app.state.gamedata = gamedata
     app.state.sessions = SessionStore()
+    # `trade_settings_path`, if not given, defaults to the real
+    # data/local/trade_settings.json (see pricing.config.DEFAULT_SETTINGS_PATH)
+    # -- tests pass an isolated tmp_path so they never read/write the real
+    # local settings file.
+    app.state.trade_settings = TradeSettingsStore(trade_settings_path)
 
     if n_pool_workers is None:
         n_pool_workers = int(os.environ.get("POE2CRAFT_POOL_WORKERS", "0"))
@@ -81,6 +88,7 @@ def create_app(
 
     app.include_router(catalog.router)
     app.include_router(crafting.router)
+    app.include_router(trade_settings.router)
 
     # Built frontend (`npm run build` under frontend/) is optional -- absent
     # during backend-only development, present for normal local use so

@@ -150,7 +150,9 @@ def _trade_client(league: Optional[str]):
     from poe2craft.pricing.trade_client import TradeClient
     from poe2craft.pricing.transport import RequestsTransport
 
-    config = TradeConfig.from_env()
+    # TradeConfig.load(), not from_env(): also picks up anything saved via
+    # the web UI's Trade settings panel, so the CLI and the web app agree.
+    config = TradeConfig.load()
     if league is not None:
         config = TradeConfig(poesessid=config.poesessid, league=league)
     return TradeClient(config, RequestsTransport())

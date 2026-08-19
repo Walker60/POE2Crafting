@@ -3,6 +3,7 @@ import { api, type SolveResponse } from './api';
 import { SetupForm } from './components/SetupForm';
 import { RecommendationPanel } from './components/RecommendationPanel';
 import { ReportStateForm } from './components/ReportStateForm';
+import { TradeSettings } from './components/TradeSettings';
 
 interface SetupInfo {
   baseId: string;
@@ -73,6 +74,7 @@ function App() {
         </nav>
       </header>
       <main id="root-layout">
+        <TradeSettings />
         {!result || !setupInfo ? (
           <SetupForm onSolved={handleSolved} />
         ) : (

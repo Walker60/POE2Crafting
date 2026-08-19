@@ -47,11 +47,12 @@ def gamedata() -> GameData:
 
 
 @pytest.fixture
-def app(gamedata):
+def app(gamedata, tmp_path):
     # n_pool_workers=0: keep the test suite fast and process-free -- the
     # parallel path isn't exercised here, only via the real gamedata in
-    # tests/integration/test_parallel.py.
-    return create_app(gamedata=gamedata, n_pool_workers=0)
+    # tests/integration/test_parallel.py. trade_settings_path: an isolated
+    # tmp file, never the real data/local/trade_settings.json.
+    return create_app(gamedata=gamedata, n_pool_workers=0, trade_settings_path=tmp_path / "trade_settings.json")
 
 
 @pytest.fixture

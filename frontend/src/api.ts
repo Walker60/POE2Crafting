@@ -166,6 +166,19 @@ export interface PoolPreviewResponse {
   unavailable_reason: string | null;
 }
 
+export interface TradeSettingsResponse {
+  league: string | null;
+  poesessid_set: boolean;
+  active_leagues: string[] | null;
+  active_leagues_error: string | null;
+}
+
+export interface TradeSettingsUpdateRequest {
+  league?: string | null;
+  poesessid?: string | null;
+  clear_poesessid?: boolean;
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const resp = await fetch(path, {
     headers: { 'Content-Type': 'application/json' },
@@ -227,4 +240,7 @@ export const api = {
   // or on a timer. See docs/data_provenance.md.
   tradeCompare: (sessionId: string) =>
     request<TradeComparisonResponse>(`/api/sessions/${encodeURIComponent(sessionId)}/trade-compare`, { method: 'POST' }),
+  getTradeSettings: () => request<TradeSettingsResponse>('/api/trade-settings'),
+  updateTradeSettings: (body: TradeSettingsUpdateRequest) =>
+    request<TradeSettingsResponse>('/api/trade-settings', { method: 'PUT', body: JSON.stringify(body) }),
 };

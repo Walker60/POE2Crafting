@@ -5,3 +5,7 @@ __pycache__/
 out/
 .ruff_cache/
 .claude/
+# Trade settings panel's local override (may hold a real POESESSID session
+# cookie) -- see pricing.config.DEFAULT_SETTINGS_PATH and
+# docs/data_provenance.md. Must never be committed.
+data/local/

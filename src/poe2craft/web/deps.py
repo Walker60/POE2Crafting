@@ -7,7 +7,7 @@ from concurrent.futures import ProcessPoolExecutor
 from fastapi import Request
 
 from poe2craft.data.loader import GameData
-from poe2craft.pricing.config import TradeConfig
+from poe2craft.pricing.settings_store import TradeSettingsStore
 from poe2craft.pricing.trade_client import TradeClient
 from poe2craft.pricing.transport import RequestsTransport
 from poe2craft.web.session import SessionStore
@@ -27,18 +27,30 @@ def get_executor(request: Request) -> ProcessPoolExecutor | None:
     return request.app.state.executor
 
 
+def get_trade_settings_store(request: Request) -> TradeSettingsStore:
+    return request.app.state.trade_settings
+
+
 def get_trade_client(request: Request) -> TradeClient:
-    """Built lazily on first use, not at server startup -- constructing this
-    never requires POE2CRAFT_POESESSID/POE2CRAFT_TRADE_LEAGUE to be set, and
-    never performs a network call by itself (see docs/data_provenance.md:
-    this whole subsystem must only ever fire on an explicit user action, and
-    a real trade2 request only happens once a route actually calls
+    """A fresh `TradeClient` per request, built from whatever the trade
+    settings store currently resolves to (env vars, overlaid by anything
+    saved via the web UI's Trade settings panel -- see
+    `pricing.config.TradeConfig.load`). Deliberately not cached on
+    `app.state` the way `get_trade_stat_mapping` is: a cached client would
+    keep using stale settings after a `PUT /api/trade-settings` until the
+    server restarted. Only the underlying `requests.Session` (via
+    `RequestsTransport`) is reused across requests -- constructing a new
+    `TradeClient` wrapper around it is cheap, and this never performs a
+    network call by itself (see docs/data_provenance.md: this whole
+    subsystem must only ever fire on an explicit user action, and a real
+    trade2 request only happens once a route actually calls
     `.search()`/`.fetch()`, not from constructing the client)."""
-    client = getattr(request.app.state, "trade_client", None)
-    if client is None:
-        client = TradeClient(TradeConfig.from_env(), RequestsTransport())
-        request.app.state.trade_client = client
-    return client
+    transport = getattr(request.app.state, "trade_transport", None)
+    if transport is None:
+        transport = RequestsTransport()
+        request.app.state.trade_transport = transport
+    settings: TradeSettingsStore = request.app.state.trade_settings
+    return TradeClient(settings.current(), transport)
 
 
 def get_trade_stat_mapping(request: Request) -> dict:

@@ -59,11 +59,18 @@ snapshot, and not a gray area in the same sense as the two above (see its own
   tool -- if that changes, or GGG raises an issue, this integration should be
   removed immediately, not just reconsidered.
 - **Credential**: using it authenticated means passing your own PoE account's
-  POESESSID session cookie. Read once, from the `POE2CRAFT_POESESSID`
-  environment variable (`poe2craft.pricing.config.TradeConfig`), never
-  logged, never a field on any request/response model the web API exposes --
-  it never leaves the server process. Optional: it works logged out too,
-  just rate-limited harder.
+  POESESSID session cookie. Two ways to provide it, in precedence order (see
+  `TradeConfig.load`): the `POE2CRAFT_POESESSID` environment variable (the
+  original mechanism, process-lifetime only), or the web UI's "Trade
+  settings" panel, which saves it to a local file (`data/local/
+  trade_settings.json`, **explicitly gitignored** -- see `pricing.
+  settings_store.TradeSettingsStore`). That file is a deliberate tradeoff:
+  plaintext on the user's own disk, in exchange for not having to re-enter
+  the cookie every server restart. It's never logged, never a field on any
+  *response* the web API returns (write-only from the browser's
+  perspective, via `TradeSettingsUpdateRequest`), and never sent anywhere
+  except to pathofexile.com itself when a query actually runs. Optional
+  either way: it works logged out too, just rate-limited harder.
 - **`GET /api/trade2/data/stats`** (the stat-filter catalog used to map this
   project's mod ids to trade's `stat_XXXXXXXX` ids, see
   `poe2craft.pricing.stat_matching`) sits under the same unofficial

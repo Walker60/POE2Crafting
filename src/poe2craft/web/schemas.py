@@ -156,6 +156,30 @@ class TradeComparisonResponse(BaseModel):
     unit: str = "currency (Divine Orb)"
 
 
+class TradeSettingsResponse(BaseModel):
+    league: str | None
+    poesessid_set: bool
+    """Whether a POESESSID is effectively configured right now (from the
+    settings file or the environment) -- the value itself is never
+    returned, here or anywhere else."""
+    active_leagues: list[str] | None
+    """Real, currently-active PoE2 league names from GGG's officially
+    documented Leagues endpoint, for the UI's dropdown -- `None` (with
+    `active_leagues_error` set) when that live lookup itself failed; this
+    must never block reading or saving your own settings."""
+    active_leagues_error: str | None
+
+
+class TradeSettingsUpdateRequest(BaseModel):
+    league: str | None = None
+    """`None`/omitted leaves the saved league unchanged."""
+    poesessid: str | None = None
+    """`None`/omitted (e.g. the password field was left blank) leaves the
+    saved POESESSID unchanged -- set `clear_poesessid` to remove it instead
+    of trying to "set" it to empty."""
+    clear_poesessid: bool = False
+
+
 class AlternativeAction(BaseModel):
     action_id: str
     name: str

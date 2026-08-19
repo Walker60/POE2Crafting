@@ -190,18 +190,25 @@ uv run python scripts/fetch_trade_stats.py
 uv run python scripts/build_trade_stat_mapping.py
 ```
 
-Then, per shell session, set the league to query (never guessed
-automatically) and optionally your account's session cookie (works logged
-out too, just rate-limited harder -- see `docs/data_provenance.md` for
-exactly how this credential is and isn't handled):
+Then set the league to query (never guessed automatically) and optionally
+your account's session cookie (works logged out too, just rate-limited
+harder -- see `docs/data_provenance.md` for exactly how this credential is
+and isn't handled). Two ways to do this, checked in this order (a later one
+overrides an earlier one -- see `TradeConfig.load`):
 
-```
-export POE2CRAFT_TRADE_LEAGUE="Standard"     # the exact trade-site league name
-export POE2CRAFT_POESESSID="..."             # optional
-uv run poe2craft mod-price 5049 --base Amulet
-uv run poe2craft trade-compare examples/amulet_life_regen.yaml
-```
+1. **The web UI's "Trade settings" panel** (in the app's header) -- a
+   dropdown of the real, currently-active PoE2 leagues (fetched live from
+   GGG's official Leagues endpoint) plus a POESESSID field. Saved to
+   `data/local/trade_settings.json`, which is gitignored -- see
+   `docs/data_provenance.md` for the plaintext-local-file tradeoff this
+   makes, in exchange for not having to re-enter the cookie every restart.
+2. **Environment variables**, per shell session -- works for the CLI too,
+   not just the web UI:
 
-The web UI reads the same two environment variables from whatever process
-`poe2craft serve` runs in.
+   ```
+   export POE2CRAFT_TRADE_LEAGUE="Standard"     # the exact trade-site league name
+   export POE2CRAFT_POESESSID="..."             # optional
+   uv run poe2craft mod-price 5049 --base Amulet
+   uv run poe2craft trade-compare examples/amulet_life_regen.yaml
+   ```
 # POE2Crafting
