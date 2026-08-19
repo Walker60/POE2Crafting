@@ -1,0 +1,13 @@
+# Body Armour (STR), chasing the essence-exclusive "increased maximum Life" mod
+# (mod 5698, weight=0 in the normal pool -- only obtainable via Perfect Essence
+# of the Body). A good test that the solver correctly discovers essence use is
+# *mandatory* here, not just efficient.
+base: Body Armour (STR)
+ilvl: 80
+target_mods:
+  - mod_id: "5698"
+    name: "#% increased maximum Life (essence-exclusive)"
+start_rarity: normal
+start_mod_ids: []
+objective: steps
+max_steps: 30

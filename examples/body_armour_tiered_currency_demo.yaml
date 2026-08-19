@@ -1,0 +1,16 @@
+# Demonstrates tiered currencies mattering for the "steps" objective: mod 5049
+# ("Life Regeneration per second") only has tiers at ilvl>=8 with the specific
+# ilvl-58 tier tested being ~2.5x more likely to be drawn under a Perfect
+# Exalted Orb (min modifier level 50) than a base Exalted Orb, since the floor
+# removes ~59% of the competing pool weight. Steps-minimizing should prefer
+# this despite Perfect Exalted's much higher currency cost (cost is irrelevant
+# to the "steps" objective).
+base: Body Armour (STR)
+ilvl: 82
+target_mods:
+  - mod_id: "5049"
+    name: "# Life Regeneration per second"
+start_rarity: normal
+start_mod_ids: []
+objective: steps
+max_steps: 30

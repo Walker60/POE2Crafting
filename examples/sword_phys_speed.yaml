@@ -1,0 +1,12 @@
+# One Hand Sword, chasing increased Physical Damage (prefix) + Attack Speed (suffix).
+base: One Hand Sword
+ilvl: 75
+target_mods:
+  - mod_id: "5120"
+    name: "#% increased Physical Damage"
+  - mod_id: "5092"
+    name: "#% increased Attack Speed"
+start_rarity: normal
+start_mod_ids: []
+objective: steps
+max_steps: 40

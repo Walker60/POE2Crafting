@@ -1,0 +1,12 @@
+# Body Armour (STR), chasing increased Armour (prefix) + Life Regeneration (suffix).
+base: Body Armour (STR)
+ilvl: 75
+target_mods:
+  - mod_id: "5067"
+    name: "#% increased Armour"
+  - mod_id: "5049"
+    name: "# Life Regeneration per second"
+start_rarity: normal
+start_mod_ids: []
+objective: cost
+max_steps: 40

@@ -1,0 +1,11 @@
+# Example target spec: an ilvl-80 Amulet with one specific suffix mod.
+# mod_id values come from data/compiled/poe2_gamedata.json's `mods` list.
+base: Amulet
+ilvl: 80
+target_mods:
+  - mod_id: "5049"
+    name: "# Life Regeneration per second"
+start_rarity: normal
+start_mod_ids: []
+objective: steps
+max_steps: 30

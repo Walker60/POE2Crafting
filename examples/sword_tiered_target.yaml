@@ -1,0 +1,16 @@
+# Demonstrates modifier-tier targeting: mod 5119 ("#% increased Elemental
+# Damage with Attacks") has tiers at ilvl 4/16/33/46/60/81 on One Hand Sword.
+# min_ilvl: 60 means only the top 2 tiers count as satisfying the target --
+# rolling it at a weaker tier leaves the state at "present but below tier"
+# (status 1), not satisfied (status 2). Compare against
+# sword_phys_speed.yaml's plain (no min_ilvl) targeting of a similar mod.
+base: One Hand Sword
+ilvl: 85
+target_mods:
+  - mod_id: "5119"
+    name: "#% increased Elemental Damage with Attacks"
+    min_ilvl: 60
+start_rarity: normal
+start_mod_ids: []
+objective: steps
+max_steps: 40
