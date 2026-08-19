@@ -14,15 +14,48 @@ from __future__ import annotations
 
 import dataclasses
 import random
+from dataclasses import dataclass, field
 
 from poe2craft.data.loader import GameData
 from poe2craft.domain.actions import ActionKind, BoneFamily, BoneTier, CurrencyTier
 from poe2craft.domain.essences import EssenceDef
-from poe2craft.domain.ids import BaseId
+from poe2craft.domain.ids import BaseId, ModId
 from poe2craft.domain.items import Item, Rarity, RolledAffix
 from poe2craft.domain.mods import Affix, ModCategory
 from poe2craft.engine.pool import build_combined_pool, build_desecrated_pool, build_pool, has_room, item_tags
 from poe2craft.engine.sampler import roll_new_affix, roll_new_affix_any, roll_values, weighted_sample_without_replacement
+
+@dataclass(frozen=True)
+class PreviewCandidate:
+    """One (mod, tier) an odds preview could report -- `weight` is only
+    meaningful for the weighted-draw case; a guaranteed essence grant is
+    reported at probability 1 regardless of it."""
+
+    mod_id: ModId
+    name: str
+    tier_ilvl: int
+    weight: int = 0
+
+
+@dataclass(frozen=True)
+class PreviewResult:
+    """Returned by an in-scope action's `preview(item)`. Exactly one of
+    `entries`/`guaranteed` is ever non-empty: `entries` for a weighted draw
+    (`web/crafting.py`'s `preview` route normalizes `weight` into a
+    probability), `guaranteed` for an essence's guaranteed grant(s)
+    (probability 1 each, no normalization needed) -- see
+    docs/design_notes.md for exactly which action kinds support this at
+    all. An action with no `preview` method, or whose `preview()` returns
+    `None`, has no odds preview available."""
+
+    entries: list[PreviewCandidate] = field(default_factory=list)
+    guaranteed: list[PreviewCandidate] = field(default_factory=list)
+
+
+def _preview_from_pool(pool: list) -> PreviewResult | None:
+    if not pool:
+        return None
+    return PreviewResult(entries=[PreviewCandidate(mod_id=mod.id, name=mod.name, tier_ilvl=tier.ilvl, weight=tier.weight) for mod, tier in pool])
 
 FALLBACK_ESSENCE_COST = 0.09
 """Fallback Divine-Orb cost for an essence not in the live price snapshot (53
@@ -175,6 +208,12 @@ class TransmutationAction:
         item = dataclasses.replace(item, rarity=Rarity.MAGIC)
         return _add_affix(item, roll_new_affix_any(self._gd, item, rng, min_ilvl=self.min_ilvl))
 
+    def preview(self, item: Item) -> PreviewResult | None:
+        if item.rarity is not Rarity.NORMAL:
+            return None
+        post = dataclasses.replace(item, rarity=Rarity.MAGIC)
+        return _preview_from_pool(build_combined_pool(self._gd, post, min_ilvl=self.min_ilvl))
+
 
 class AugmentationAction:
     kind = ActionKind.AUGMENTATION
@@ -193,6 +232,11 @@ class AugmentationAction:
 
     def outcome(self, item: Item, rng: random.Random) -> Item:
         return _add_affix(item, roll_new_affix_any(self._gd, item, rng, min_ilvl=self.min_ilvl))
+
+    def preview(self, item: Item) -> PreviewResult | None:
+        if item.rarity is not Rarity.MAGIC:
+            return None
+        return _preview_from_pool(build_combined_pool(self._gd, item, min_ilvl=self.min_ilvl))
 
 
 class AlchemyAction:
@@ -301,6 +345,17 @@ class RegalAction:
         else:
             new_affix = roll_new_affix_any(self._gd, item, rng, min_ilvl=self.min_ilvl, required_tags=required_tags)
         return _add_affix(item, new_affix)
+
+    def preview(self, item: Item) -> PreviewResult | None:
+        if item.rarity is not Rarity.MAGIC:
+            return None
+        if self.homogenising and not item_tags(self._gd, item):
+            return None
+        post = dataclasses.replace(item, rarity=Rarity.RARE)
+        required_tags = self._required_tags(item)
+        if self.restrict is not None:
+            return _preview_from_pool(build_pool(self._gd, post, self.restrict, min_ilvl=self.min_ilvl, required_tags=required_tags))
+        return _preview_from_pool(build_combined_pool(self._gd, post, min_ilvl=self.min_ilvl, required_tags=required_tags))
 
 
 class DivineAction:
@@ -525,6 +580,22 @@ class ExaltedAction:
             item = _add_affix(item, new_affix)
         return item
 
+    def preview(self, item: Item) -> PreviewResult | None:
+        # count > 1 (Omen of Greater Exaltation): the second draw's pool
+        # depends on the first draw's result, so a single preview would
+        # only describe one of the (up to) `count` affixes added -- out of
+        # scope, see docs/design_notes.md.
+        if self.count > 1:
+            return None
+        if item.rarity is not Rarity.RARE:
+            return None
+        if self.homogenising and not item_tags(self._gd, item):
+            return None
+        required_tags = self._required_tags(item)
+        if self.restrict is not None:
+            return _preview_from_pool(build_pool(self._gd, item, self.restrict, min_ilvl=self.min_ilvl, required_tags=required_tags))
+        return _preview_from_pool(build_combined_pool(self._gd, item, min_ilvl=self.min_ilvl, required_tags=required_tags))
+
 
 class FractureAction:
     name = "Fracturing Orb"
@@ -646,6 +717,20 @@ class EssenceAction:
         else:
             item = dataclasses.replace(item, rarity=Rarity.RARE)
         return self._add_all_grants(item, rng)
+
+    def preview(self, item: Item) -> PreviewResult | None:
+        """No pool, no odds -- an essence guarantees its grant(s) (usually
+        one, 2-3 for a hybrid essence). For a Perfect essence this only
+        covers the guaranteed *add*; which existing mod gets removed first
+        is a uniform pick among candidates (the same shape as Annulment/
+        Chaos), left out of scope here just like those two."""
+        if not self.applicable(item):
+            return None
+        return PreviewResult(
+            guaranteed=[
+                PreviewCandidate(mod_id=g.mod_id, name=self._gd.mods[g.mod_id].name, tier_ilvl=g.ilvl) for g in self.grants
+            ]
+        )
 
 
 def essence_actions_for(gamedata: GameData, base_id: BaseId) -> dict[str, object]:

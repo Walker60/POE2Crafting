@@ -20,9 +20,27 @@ from dataclasses import dataclass, field
 
 from poe2craft.domain.items import Item
 from poe2craft.solver.featurize import AbstractState, ResolvedTarget
+from poe2craft.solver.model_learning import MDP
 from poe2craft.solver.value_iteration import SolveResult
 
 SESSION_TTL_SECONDS = 2 * 60 * 60  # 2 hours of inactivity
+
+MAX_HISTORY_ENTRIES = 50
+"""Caps `Session.history` so a very long crafting session (many `advance`
+calls) can't grow it unboundedly -- the oldest entry is dropped first, same
+trade-off a normal in-game "undo" buffer makes."""
+
+
+@dataclass(frozen=True, slots=True)
+class HistoryEntry:
+    """A snapshot of the state/item at a past point in the session, so
+    `/undo` can restore exactly what the item looked like then. Deliberately
+    doesn't try to resurrect the *banner* (`resolved_via`/`note`) that was
+    shown at that point -- `/undo`'s own response always reports
+    `resolved_via="undo"`, a clear enough signal on its own."""
+
+    state: AbstractState
+    item: Item
 
 
 @dataclass
@@ -31,13 +49,24 @@ class Session:
     target: ResolvedTarget
     actions: dict[str, object]
     result: SolveResult
+    mdp: MDP
     current_state: AbstractState
     current_item: Item
     rng: random.Random
     n_trials: int
-    history: list[dict] = field(default_factory=list)
+    history: list[HistoryEntry] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
     last_used_at: float = field(default_factory=time.time)
+
+    def push_history(self) -> None:
+        """Snapshots the *current* state/item before the caller overwrites
+        them -- called by `advance_session` right before mutating
+        `current_state`/`current_item`, never after."""
+        self.history.append(HistoryEntry(state=self.current_state, item=self.current_item))
+        del self.history[:-MAX_HISTORY_ENTRIES]
+
+    def pop_history(self) -> HistoryEntry | None:
+        return self.history.pop() if self.history else None
 
 
 class SessionStore:
@@ -53,6 +82,7 @@ class SessionStore:
         target: ResolvedTarget,
         actions: dict[str, object],
         result: SolveResult,
+        mdp: MDP,
         current_state: AbstractState,
         current_item: Item,
         rng: random.Random,
@@ -63,6 +93,7 @@ class SessionStore:
             target=target,
             actions=actions,
             result=result,
+            mdp=mdp,
             current_state=current_state,
             current_item=current_item,
             rng=rng,

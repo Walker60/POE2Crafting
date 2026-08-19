@@ -77,6 +77,8 @@ class RecommendedAction(BaseModel):
 
 class SolveResponse(BaseModel):
     session_id: str
+    base_id: str
+    ilvl: int
     target_progress: list[TargetProgressItem]
     prefix_count: int
     suffix_count: int
@@ -92,8 +94,9 @@ class SolveResponse(BaseModel):
     converged: bool
     iterations: int
     states_explored: int
-    # Only meaningful on /advance responses -- None on the initial setup response.
-    resolved_via: str | None = None  # "cached_policy" | "resolved_fresh"
+    can_undo: bool
+    # Only meaningful on /advance and /undo responses -- None on the initial setup response.
+    resolved_via: str | None = None  # "cached_policy" | "resolved_fresh" | "undo"
     note: str | None = None
 
 
@@ -151,3 +154,43 @@ class TradeComparisonResponse(BaseModel):
     recommendation: str  # "keep_crafting" | "buy" | "sell_and_restart" | "insufficient_data"
     caveats: list[str]
     unit: str = "currency (Divine Orb)"
+
+
+class AlternativeAction(BaseModel):
+    action_id: str
+    name: str
+    cost: float
+    expected_total: float
+    """-Q(state, action) in `unit` terms -- the expected steps/cost to
+    finish if this action were taken *right now*, then the optimal policy
+    followed from there. Directly comparable to `SolveResponse.
+    estimated_remaining`, which is this same number for whichever action the
+    policy already recommends."""
+    is_recommended: bool
+
+
+class AlternativeActionsResponse(BaseModel):
+    alternatives: list[AlternativeAction]
+    unit: str
+
+
+class PoolPreviewEntry(BaseModel):
+    mod_id: str
+    name: str
+    tier_ilvl: int
+    probability: float
+
+
+class PoolPreviewResponse(BaseModel):
+    available: bool
+    """False when this action kind isn't a clean single weighted draw (e.g.
+    Alchemy, Greater Exaltation, Annulment/Chaos, Desecration) -- see
+    docs/design_notes.md. `entries`/`guaranteed` are both empty/None then."""
+    entries: list[PoolPreviewEntry]
+    """The weighted-draw case (Transmutation/Augmentation/Regal/Exalted):
+    every reachable (mod, tier) with its roll probability, summing to 1."""
+    guaranteed: list[PoolPreviewEntry]
+    """The essence case: no odds to compute, just the mod(s)/tier(s) this
+    essence's use is guaranteed to grant (probability 1 each) -- usually one
+    entry, occasionally 2-3 for a hybrid essence."""
+    unavailable_reason: str | None

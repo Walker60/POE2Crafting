@@ -1,5 +1,12 @@
 import { useState } from 'react';
-import { api, type CostSpreadResponse, type SolveResponse, type TradeComparisonResponse } from '../api';
+import {
+  api,
+  type AlternativeActionsResponse,
+  type CostSpreadResponse,
+  type PoolPreviewResponse,
+  type SolveResponse,
+  type TradeComparisonResponse,
+} from '../api';
 import { Collapsible } from './Collapsible';
 
 const RECOMMENDATION_LABEL: Record<string, string> = {
@@ -12,6 +19,7 @@ const RECOMMENDATION_LABEL: Record<string, string> = {
 interface Props {
   result: SolveResponse;
   onStartOver: () => void;
+  onUndo: (result: SolveResponse) => void;
 }
 
 const STATUS_LABEL: Record<string, string> = {
@@ -24,7 +32,11 @@ function fmtDivine(n: number): string {
   return `${n.toFixed(2)} d`;
 }
 
-export function RecommendationPanel({ result, onStartOver }: Props) {
+function fmtByUnit(n: number, unit: string): string {
+  return unit === 'steps' ? n.toFixed(2) : fmtDivine(n);
+}
+
+export function RecommendationPanel({ result, onStartOver, onUndo }: Props) {
   const [spread, setSpread] = useState<CostSpreadResponse | null>(null);
   const [spreadLoading, setSpreadLoading] = useState(false);
   const [spreadError, setSpreadError] = useState<string | null>(null);
@@ -56,6 +68,50 @@ export function RecommendationPanel({ result, onStartOver }: Props) {
       .then(setTrade)
       .catch((e) => setTradeError(String((e as Error).message ?? e)))
       .finally(() => setTradeLoading(false));
+  }
+
+  const [alternatives, setAlternatives] = useState<AlternativeActionsResponse | null>(null);
+  const [alternativesLoading, setAlternativesLoading] = useState(false);
+  const [alternativesError, setAlternativesError] = useState<string | null>(null);
+
+  function loadAlternatives() {
+    if (alternatives || alternativesLoading) return;
+    setAlternativesLoading(true);
+    setAlternativesError(null);
+    api
+      .alternatives(result.session_id, 3)
+      .then(setAlternatives)
+      .catch((e) => setAlternativesError(String((e as Error).message ?? e)))
+      .finally(() => setAlternativesLoading(false));
+  }
+
+  const [undoLoading, setUndoLoading] = useState(false);
+  const [undoError, setUndoError] = useState<string | null>(null);
+
+  function runUndo() {
+    if (undoLoading) return;
+    setUndoLoading(true);
+    setUndoError(null);
+    api
+      .undo(result.session_id)
+      .then(onUndo)
+      .catch((e) => setUndoError(String((e as Error).message ?? e)))
+      .finally(() => setUndoLoading(false));
+  }
+
+  const [preview, setPreview] = useState<PoolPreviewResponse | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+
+  function loadPreview(actionId: string) {
+    if (preview || previewLoading) return;
+    setPreviewLoading(true);
+    setPreviewError(null);
+    api
+      .preview(result.session_id, actionId)
+      .then(setPreview)
+      .catch((e) => setPreviewError(String((e as Error).message ?? e)))
+      .finally(() => setPreviewLoading(false));
   }
 
   return (
@@ -91,6 +147,29 @@ export function RecommendationPanel({ result, onStartOver }: Props) {
           <p className="loop-caption">
             LOOP &middot; NOT ONE CLICK -- apply this, then report the item's new state below.
           </p>
+          <button
+            type="button"
+            className="start-over"
+            onClick={() => loadPreview(result.recommended_action!.action_id)}
+            disabled={previewLoading}
+          >
+            {previewLoading ? 'Checking odds...' : 'Preview odds'}
+          </button>
+          {previewError && <p className="error">{previewError}</p>}
+          {preview && !preview.available && (
+            <p className="help-text">{preview.unavailable_reason ?? "Odds preview isn't available for this action."}</p>
+          )}
+          {preview && preview.available && (
+            <ul className="target-progress">
+              {(preview.guaranteed.length > 0 ? preview.guaranteed : preview.entries).map((e) => (
+                <li key={e.mod_id}>
+                  <span className="mod-name">{e.name}</span>
+                  <span className="min-ilvl">tier ilvl {e.tier_ilvl}</span>
+                  <span className="status-label">{(e.probability * 100).toFixed(1)}%</span>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
 
@@ -114,6 +193,31 @@ export function RecommendationPanel({ result, onStartOver }: Props) {
           </span>
           <span className={`rarity-tag rarity-${result.rarity}`}>{result.rarity}</span>
         </p>
+      </Collapsible>
+
+      <Collapsible title="Other options" onOpen={loadAlternatives}>
+        {alternativesLoading && <p>Comparing options...</p>}
+        {alternativesError && <p className="error">{alternativesError}</p>}
+        {alternatives && (
+          <>
+            <ul className="target-progress">
+              {alternatives.alternatives.map((a) => (
+                <li key={a.action_id} className={a.is_recommended ? 'status-satisfied' : undefined}>
+                  <span className="mod-name">
+                    {a.name}
+                    {a.is_recommended ? ' (recommended)' : ''}
+                  </span>
+                  <span className="min-ilvl">{fmtDivine(a.cost)}</span>
+                  <span className="status-label">{fmtByUnit(a.expected_total, alternatives.unit)}</span>
+                </li>
+              ))}
+            </ul>
+            <p className="help-text">
+              Cost is what this one action costs; the other number is the expected total {alternatives.unit} to
+              finish if you took it right now and followed the best plan from there.
+            </p>
+          </>
+        )}
       </Collapsible>
 
       <Collapsible title="Cost to finish from here" onOpen={loadSpread}>
@@ -224,9 +328,17 @@ export function RecommendationPanel({ result, onStartOver }: Props) {
         </div>
       </Collapsible>
 
-      <button type="button" className="start-over" onClick={onStartOver}>
-        Start over
-      </button>
+      {undoError && <p className="error">{undoError}</p>}
+      <div className="stat-row">
+        {result.can_undo && (
+          <button type="button" className="start-over" onClick={runUndo} disabled={undoLoading}>
+            {undoLoading ? 'Undoing...' : 'Undo'}
+          </button>
+        )}
+        <button type="button" className="start-over" onClick={onStartOver}>
+          Start over
+        </button>
+      </div>
     </div>
   );
 }

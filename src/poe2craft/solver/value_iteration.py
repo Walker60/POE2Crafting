@@ -31,6 +31,14 @@ class SolveResult:
     converged: bool
     iterations: int
     dead_ends: set[AbstractState] = field(default_factory=set)
+    gamma: float = 0.999
+    objective: str = "steps"
+    """`gamma`/`objective` are the discount factor and reward mode this
+    result was actually solved with -- stored (rather than left as
+    call-and-forget locals) so a later on-demand Q-value recompute (see
+    `q_value`/`q_values_at`, used for the web API's "alternative actions"
+    view) reproduces the same numbers the original solve did, not a
+    re-guessed default that could silently disagree."""
 
     def expected_value(self, state: AbstractState) -> float:
         return self.value.get(state, DEAD_END_VALUE)
@@ -38,6 +46,39 @@ class SolveResult:
 
 def _reward(objective: str, action) -> float:
     return -1.0 if objective == "steps" else -action.cost()
+
+
+def q_value(
+    mdp: MDP, actions: dict[str, object], value: dict[AbstractState, float], objective: str, state: AbstractState, action_id: str, gamma: float
+) -> float | None:
+    """Q(state, action_id) under an already-converged value function -- the
+    same formula `value_iteration`'s own loops use, but for a single
+    (state, action) pair on demand (e.g. to list runner-up actions) rather
+    than every state/action `value_iteration` itself needs every iteration.
+    Deliberately a *separate* implementation from those loops rather than a
+    shared call: they precompute `rewards` once per solve and call this
+    formula every (state, action) pair on every iteration, so paying
+    `action.cost()` again per call there (as this standalone version does)
+    would reintroduce exactly the kind of per-call overhead this project's
+    solver performance work eliminated. `None` when this action has no
+    learned transition from `state` at all (never applicable there)."""
+    dist = mdp.transitions.get((state, action_id))
+    if not dist:
+        return None
+    reward = _reward(objective, actions[action_id])
+    return reward + gamma * sum(p * value.get(s2, DEAD_END_VALUE) for s2, p in dist.items())
+
+
+def q_values_at(mdp: MDP, actions: dict[str, object], result: SolveResult, state: AbstractState) -> dict[str, float]:
+    """Every action's Q-value at `state`, for actions with a learned
+    transition from it -- the "what are my options and how good is each"
+    view behind the web API's alternative-actions endpoint."""
+    out: dict[str, float] = {}
+    for action_id in actions:
+        q = q_value(mdp, actions, result.value, result.objective, state, action_id, result.gamma)
+        if q is not None:
+            out[action_id] = q
+    return out
 
 
 def value_iteration(
@@ -103,4 +144,6 @@ def value_iteration(
         if best_action is not None:
             policy[s] = best_action
 
-    return SolveResult(value=value, policy=policy, converged=converged, iterations=iterations, dead_ends=dead_ends)
+    return SolveResult(
+        value=value, policy=policy, converged=converged, iterations=iterations, dead_ends=dead_ends, gamma=gamma, objective=objective
+    )

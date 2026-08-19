@@ -70,6 +70,8 @@ export interface RecommendedAction {
 
 export interface SolveResponse {
   session_id: string;
+  base_id: string;
+  ilvl: number;
   target_progress: TargetProgressItem[];
   prefix_count: number;
   suffix_count: number;
@@ -85,7 +87,8 @@ export interface SolveResponse {
   converged: boolean;
   iterations: number;
   states_explored: number;
-  resolved_via: 'cached_policy' | 'resolved_fresh' | null;
+  can_undo: boolean;
+  resolved_via: 'cached_policy' | 'resolved_fresh' | 'undo' | null;
   note: string | null;
 }
 
@@ -136,6 +139,33 @@ export interface TradeComparisonResponse {
   unit: string;
 }
 
+export interface AlternativeAction {
+  action_id: string;
+  name: string;
+  cost: number;
+  expected_total: number;
+  is_recommended: boolean;
+}
+
+export interface AlternativeActionsResponse {
+  alternatives: AlternativeAction[];
+  unit: string;
+}
+
+export interface PoolPreviewEntry {
+  mod_id: string;
+  name: string;
+  tier_ilvl: number;
+  probability: number;
+}
+
+export interface PoolPreviewResponse {
+  available: boolean;
+  entries: PoolPreviewEntry[];
+  guaranteed: PoolPreviewEntry[];
+  unavailable_reason: string | null;
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const resp = await fetch(path, {
     headers: { 'Content-Type': 'application/json' },
@@ -175,14 +205,23 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+  getSession: (sessionId: string) => request<SolveResponse>(`/api/sessions/${encodeURIComponent(sessionId)}`),
   deleteSession: (sessionId: string) =>
     request<void>(`/api/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' }),
+  undo: (sessionId: string) =>
+    request<SolveResponse>(`/api/sessions/${encodeURIComponent(sessionId)}/undo`, { method: 'POST' }),
   parseItem: (body: ParseItemRequest) =>
     request<ParseItemResponse>('/api/parse-item', { method: 'POST', body: JSON.stringify(body) }),
   costSpread: (sessionId: string, nRollouts?: number) =>
     request<CostSpreadResponse>(
       `/api/sessions/${encodeURIComponent(sessionId)}/cost-spread${nRollouts ? `?n_rollouts=${nRollouts}` : ''}`
     ),
+  alternatives: (sessionId: string, topN?: number) =>
+    request<AlternativeActionsResponse>(
+      `/api/sessions/${encodeURIComponent(sessionId)}/alternatives${topN ? `?top_n=${topN}` : ''}`
+    ),
+  preview: (sessionId: string, actionId: string) =>
+    request<PoolPreviewResponse>(`/api/sessions/${encodeURIComponent(sessionId)}/preview/${encodeURIComponent(actionId)}`),
   // Hits the live pathofexile.com/trade2 API server-side -- only ever call
   // this from an explicit user action (a button click), never automatically
   // or on a timer. See docs/data_provenance.md.

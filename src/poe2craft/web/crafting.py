@@ -30,11 +30,15 @@ from poe2craft.solver.featurize import (
     start_state,
 )
 from poe2craft.solver.model_learning import build_mdp
-from poe2craft.solver.value_iteration import value_iteration
+from poe2craft.solver.value_iteration import q_values_at, value_iteration
 from poe2craft.web.deps import get_executor, get_gamedata, get_session_store, get_trade_client, get_trade_stat_mapping
 from poe2craft.web.schemas import (
     AdvanceRequest,
+    AlternativeAction,
+    AlternativeActionsResponse,
     CostSpreadResponse,
+    PoolPreviewEntry,
+    PoolPreviewResponse,
     RecommendedAction,
     SetupRequest,
     SolveResponse,
@@ -83,6 +87,8 @@ def _build_response(
 
     return SolveResponse(
         session_id=session.session_id,
+        base_id=str(target.base_id),
+        ilvl=target.ilvl,
         target_progress=target_progress,
         prefix_count=state.prefix_count,
         suffix_count=state.suffix_count,
@@ -98,6 +104,7 @@ def _build_response(
         converged=result.converged,
         iterations=result.iterations,
         states_explored=len(result.value),
+        can_undo=bool(session.history),
         resolved_via=resolved_via,
         note=note,
     )
@@ -145,6 +152,7 @@ def create_session(
         target=target,
         actions=actions,
         result=result,
+        mdp=mdp,
         current_state=state0,
         current_item=item,
         rng=rng,
@@ -175,6 +183,7 @@ def advance_session(
     new_state = abstractify(session.target, item)
 
     if new_state in session.result.value:
+        session.push_history()
         session.current_state = new_state
         session.current_item = item
         return _build_response(session, gamedata, resolved_via="cached_policy")
@@ -195,6 +204,8 @@ def advance_session(
         base_id=session.target.base_id,
     )
     session.result = value_iteration(mdp, session.actions, objective=session.target.objective)
+    session.mdp = mdp  # alternatives/preview must reflect the newly-enlarged reachable set, not the stale original one
+    session.push_history()
     session.current_state = new_state
     session.current_item = item
     return _build_response(
@@ -305,4 +316,115 @@ def trade_compare(
         sell_and_restart_net_cost=restart_net_cost,
         recommendation=recommendation,
         caveats=list(buy.caveats) + list(sell.caveats),
+    )
+
+
+@router.get("/{session_id}/alternatives", response_model=AlternativeActionsResponse)
+def alternatives(
+    session_id: str,
+    top_n: int = 3,
+    store: SessionStore = Depends(get_session_store),
+) -> AlternativeActionsResponse:
+    """The top `top_n` actions by expected value at the current state, not
+    just the single greedy recommendation -- lets the user compare options
+    before spending currency in-game, the way competing crafting tools do."""
+    session = store.get(session_id)
+    if session is None:
+        raise HTTPException(404, f"unknown or expired session {session_id!r}")
+    top_n = max(1, min(top_n, len(session.actions)))
+
+    qs = q_values_at(session.mdp, session.actions, session.result, session.current_state)
+    recommended_id = session.result.policy.get(session.current_state)
+    ranked = sorted(qs.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
+
+    unit = "steps" if session.target.objective == "steps" else "currency (Divine Orb)"
+    return AlternativeActionsResponse(
+        alternatives=[
+            AlternativeAction(
+                action_id=action_id,
+                name=session.actions[action_id].name,
+                cost=session.actions[action_id].cost(),
+                expected_total=-q,
+                is_recommended=action_id == recommended_id,
+            )
+            for action_id, q in ranked
+        ],
+        unit=unit,
+    )
+
+
+@router.post("/{session_id}/undo", response_model=SolveResponse)
+def undo(
+    session_id: str,
+    gamedata: GameData = Depends(get_gamedata),
+    store: SessionStore = Depends(get_session_store),
+) -> SolveResponse:
+    """Restores the item/state to what it was one report ago. A 409 (not a
+    500) when there's nothing to undo -- an expected, user-facing condition
+    at the start of a session, not a server error."""
+    session = store.get(session_id)
+    if session is None:
+        raise HTTPException(404, f"unknown or expired session {session_id!r}")
+
+    entry = session.pop_history()
+    if entry is None:
+        raise HTTPException(409, "nothing to undo -- this session has no prior reported state")
+
+    session.current_state = entry.state
+    session.current_item = entry.item
+    return _build_response(session, gamedata, resolved_via="undo")
+
+
+@router.get("/{session_id}/preview/{action_id}", response_model=PoolPreviewResponse)
+def preview(
+    session_id: str,
+    action_id: str,
+    store: SessionStore = Depends(get_session_store),
+) -> PoolPreviewResponse:
+    """The exact resulting mod-pool odds for one specific action against the
+    current item, before spending it in-game -- only available for actions
+    that are a single weighted draw (or an essence's guaranteed grant); see
+    docs/design_notes.md for exactly which action kinds this covers and why
+    the rest (Alchemy, Greater Exaltation, Annulment/Chaos, Desecration)
+    report `available: false` instead of a misleading number."""
+    session = store.get(session_id)
+    if session is None:
+        raise HTTPException(404, f"unknown or expired session {session_id!r}")
+    action = session.actions.get(action_id)
+    if action is None:
+        raise HTTPException(404, f"unknown action id {action_id!r}")
+
+    preview_result = action.preview(session.current_item) if hasattr(action, "preview") else None
+    if preview_result is None:
+        return PoolPreviewResponse(
+            available=False,
+            entries=[],
+            guaranteed=[],
+            unavailable_reason="odds preview isn't available for this action -- see docs/design_notes.md",
+        )
+
+    if preview_result.guaranteed:
+        return PoolPreviewResponse(
+            available=True,
+            entries=[],
+            guaranteed=[
+                PoolPreviewEntry(mod_id=str(e.mod_id), name=e.name, tier_ilvl=e.tier_ilvl, probability=1.0)
+                for e in preview_result.guaranteed
+            ],
+            unavailable_reason=None,
+        )
+
+    total_weight = sum(e.weight for e in preview_result.entries)
+    return PoolPreviewResponse(
+        available=True,
+        entries=sorted(
+            (
+                PoolPreviewEntry(mod_id=str(e.mod_id), name=e.name, tier_ilvl=e.tier_ilvl, probability=e.weight / total_weight)
+                for e in preview_result.entries
+            ),
+            key=lambda e: e.probability,
+            reverse=True,
+        ),
+        guaranteed=[],
+        unavailable_reason=None,
     )
