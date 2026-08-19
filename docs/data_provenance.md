@@ -76,10 +76,21 @@ snapshot, and not a gray area in the same sense as the two above (see its own
   `poe2craft.pricing.stat_matching`) sits under the same unofficial
   `/api/trade2/` path, but needs no cookie/account -- lower risk than
   search/fetch, though not on genuinely different legal footing.
-- **Leagues** (`api.pathofexile.com/leagues`, used only to validate a
-  configured league name) *is* part of GGG's documented API -- a materially
-  different footing from everything else in this section, called out
-  explicitly so it's never conflated with the unofficial endpoints.
+- **Leagues, for the "Trade settings" dropdown and league validation**
+  (`poe2craft.pricing.leagues.list_poe2_leagues`): originally used GGG's
+  officially-documented `api.pathofexile.com/leagues?realm=poe2`, on the
+  (wrong) assumption that its `realm` filter actually worked -- verified
+  live (2026-08) that it silently ignores that parameter and always returns
+  PoE1 leagues (every entry tagged `realm: "pc"`), which surfaced as PoE1's
+  current league appearing in the UI's PoE2 league dropdown. Switched to
+  `GET /api/trade2/data/leagues` instead: like `/data/stats` above, this is
+  an unofficial trade2 endpoint (no different legal footing from the rest
+  of this section, unlike what this doc previously claimed for the old
+  source), but it actually returns real `realm: "poe2"`-tagged league ids.
+  Also worth knowing: a PoE2 patch's marketing name (e.g. "Return of the
+  Ancients") and its actual league name (e.g. "Runes of Aldur") aren't
+  always the same string -- the dropdown lists the latter, since that's
+  what the trade site itself expects.
 - Exact request/response JSON shapes came from community-tool consensus
   (the convention PoE1's long-documented-by-the-community trade API uses,
   which trade2 closely mirrors), not official docs, and could silently
