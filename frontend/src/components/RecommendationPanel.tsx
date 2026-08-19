@@ -1,6 +1,13 @@
 import { useState } from 'react';
-import { api, type CostSpreadResponse, type SolveResponse } from '../api';
+import { api, type CostSpreadResponse, type SolveResponse, type TradeComparisonResponse } from '../api';
 import { Collapsible } from './Collapsible';
+
+const RECOMMENDATION_LABEL: Record<string, string> = {
+  keep_crafting: 'Keep crafting',
+  buy: 'Buy the target off trade',
+  sell_and_restart: 'Sell this item and start over',
+  insufficient_data: 'Not enough listing data for a recommendation',
+};
 
 interface Props {
   result: SolveResponse;
@@ -31,6 +38,24 @@ export function RecommendationPanel({ result, onStartOver }: Props) {
       .then(setSpread)
       .catch((e) => setSpreadError(String((e as Error).message ?? e)))
       .finally(() => setSpreadLoading(false));
+  }
+
+  const [trade, setTrade] = useState<TradeComparisonResponse | null>(null);
+  const [tradeLoading, setTradeLoading] = useState(false);
+  const [tradeError, setTradeError] = useState<string | null>(null);
+
+  // Never fetched automatically -- only `runTradeCompare` (a button click,
+  // see below) triggers a real pathofexile.com/trade2 request. See
+  // docs/data_provenance.md.
+  function runTradeCompare() {
+    if (tradeLoading) return;
+    setTradeLoading(true);
+    setTradeError(null);
+    api
+      .tradeCompare(result.session_id)
+      .then(setTrade)
+      .catch((e) => setTradeError(String((e as Error).message ?? e)))
+      .finally(() => setTradeLoading(false));
   }
 
   return (
@@ -117,6 +142,57 @@ export function RecommendationPanel({ result, onStartOver }: Props) {
               {(spread.success_rate * 100).toFixed(0)}% reached the target). Reflects the plan currently
               recommended, which may favor speed over price if you chose "fewest steps".
             </p>
+          </>
+        )}
+      </Collapsible>
+
+      <Collapsible title="Compare vs. market">
+        {result.objective !== 'cost' ? (
+          <p className="help-text">
+            Only available for a "cheapest" (cost-objective) session, so every number is in real Divine Orb terms.
+          </p>
+        ) : (
+          <>
+            <p className="help-text">
+              Checks pathofexile.com/trade2 for real listing prices -- a live network request, only made when you
+              click below.
+            </p>
+            <button type="button" className="start-over" onClick={runTradeCompare} disabled={tradeLoading}>
+              {tradeLoading ? 'Checking trade...' : 'Check trade prices'}
+            </button>
+            {tradeError && <p className="error">{tradeError}</p>}
+            {trade && (
+              <>
+                <div className="stat-row">
+                  <span>keep crafting</span>
+                  <span>{fmtDivine(trade.craft_cost)}</span>
+                </div>
+                <div className="stat-row">
+                  <span>buy the target</span>
+                  <span>{trade.buy_price !== null ? `${fmtDivine(trade.buy_price)} (${trade.buy_price_n_listings} listings)` : 'n/a'}</span>
+                </div>
+                <div className="stat-row">
+                  <span>sell current item</span>
+                  <span>
+                    {trade.sell_value !== null ? `${fmtDivine(trade.sell_value)} (${trade.sell_value_n_listings} listings)` : 'n/a'}
+                  </span>
+                </div>
+                {trade.sell_and_restart_net_cost !== null && (
+                  <div className="stat-row">
+                    <span>sell + restart, net</span>
+                    <span>{fmtDivine(trade.sell_and_restart_net_cost)}</span>
+                  </div>
+                )}
+                <p className="loop-caption">
+                  {trade.league} &middot; recommendation: {RECOMMENDATION_LABEL[trade.recommendation] ?? trade.recommendation}
+                </p>
+                {trade.caveats.map((c, i) => (
+                  <p key={i} className="help-text">
+                    {c}
+                  </p>
+                ))}
+              </>
+            )}
           </>
         )}
       </Collapsible>

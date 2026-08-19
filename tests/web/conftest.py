@@ -48,7 +48,10 @@ def gamedata() -> GameData:
 
 @pytest.fixture
 def app(gamedata):
-    return create_app(gamedata=gamedata)
+    # n_pool_workers=0: keep the test suite fast and process-free -- the
+    # parallel path isn't exercised here, only via the real gamedata in
+    # tests/integration/test_parallel.py.
+    return create_app(gamedata=gamedata, n_pool_workers=0)
 
 
 @pytest.fixture

@@ -92,4 +92,4 @@ def test_exalted_omen_restriction_combines_with_ilvl_floor(tiered_gamedata):
     result = action.outcome(rare_item, random.Random(2))
     assert result.suffixes[0].mod_id == ModId("high")
     assert "Greater Exalted Orb" in action.name
-    assert "suffixes only" in action.name
+    assert "Omen of Dextral Exaltation" in action.name

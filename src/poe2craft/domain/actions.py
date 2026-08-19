@@ -26,6 +26,31 @@ class ActionKind(str, Enum):
     FRACTURE = "fracture"
     ESSENCE = "essence"
     PERFECT_ESSENCE = "perfect_essence"
+    DESECRATION = "desecration"
+
+
+class BoneFamily(str, Enum):
+    """Which gear-slot family a Desecration bone targets -- confirmed against
+    several current PoE2 guides (poe2db.tw doesn't document Desecration at
+    all, 2026-08-19): Jawbone = one/two-handed weapons + Quiver, Rib = Body
+    Armour/Boots/Gloves/Helmets, Collarbone = Amulet/Ring/Belt, Cranium =
+    Jewels. See docs/design_notes.md."""
+
+    JAWBONE = "jawbone"
+    RIB = "rib"
+    COLLARBONE = "collarbone"
+    CRANIUM = "cranium"
+
+
+class BoneTier(str, Enum):
+    """Gnawed (cheap, only usable on an item ilvl<=64) -> Preserved (no
+    restriction) -> Ancient (guarantees the revealed mod's own tier requires
+    ilvl>=40) -- the same shape as CurrencyTier's Base/Greater/Perfect, just
+    named differently for bones."""
+
+    GNAWED = "gnawed"
+    PRESERVED = "preserved"
+    ANCIENT = "ancient"
 
 
 class CurrencyTier(str, Enum):
@@ -40,16 +65,20 @@ class CurrencyTier(str, Enum):
 
 
 class OmenKind(str, Enum):
-    """Confirmed against poe2db.tw's omen catalog (2026-08-18). Not every omen
-    poe2db lists is modeled here -- Catalysing Exaltation needs Catalyst
-    quality tracking (out of scope), Omen of Light needs Desecrated mod
-    support (out of scope), and the 4 Waystone "Chaotic ..." omens need
-    Waystone-specific tag data and are a narrower use case -- see
-    docs/design_notes.md."""
+    """Confirmed against poe2db.tw's omen catalog (2026-08-18) for everything
+    except the Desecration-related entries, which poe2db doesn't document at
+    all -- those were confirmed against several current PoE2 guides instead
+    (2026-08-19, see docs/design_notes.md). Not every omen is modeled --
+    Catalysing Exaltation needs Catalyst quality tracking (out of scope), the
+    4 Waystone "Chaotic ..." omens need Waystone-specific tag data (out of
+    scope), and Omen of Blackblooded/Liege/Sovereign (restricts a Desecration
+    reveal to "Lich" modifiers) has no confirmed tag data to classify those
+    mods by -- see docs/design_notes.md."""
 
     DEXTRAL_ANNULMENT = "dextral_annulment"  # next Annulment only removes a suffix
     SINISTRAL_ANNULMENT = "sinistral_annulment"  # next Annulment only removes a prefix
     GREATER_ANNULMENT = "greater_annulment"  # next Annulment removes two modifiers
+    LIGHT = "light"  # next Annulment only removes a Desecrated modifier
     DEXTRAL_EXALTATION = "dextral_exaltation"  # next Exalted Orb only adds a suffix
     SINISTRAL_EXALTATION = "sinistral_exaltation"  # next Exalted Orb only adds a prefix
     GREATER_EXALTATION = "greater_exaltation"  # next Exalted Orb adds two modifiers
@@ -64,6 +93,9 @@ class OmenKind(str, Enum):
     WHITTLING = "whittling"  # next Chaos Orb removes the lowest-level modifier
     SINISTRAL_CRYSTALLISATION = "sinistral_crystallisation"  # next Perfect Essence only removes a prefix
     DEXTRAL_CRYSTALLISATION = "dextral_crystallisation"  # next Perfect Essence only removes a suffix
+    SINISTRAL_NECROMANCY = "sinistral_necromancy"  # next Desecration reveal only shows prefixes
+    DEXTRAL_NECROMANCY = "dextral_necromancy"  # next Desecration reveal only shows suffixes
+    ABYSSAL_ECHOES = "abyssal_echoes"  # next Desecration reveal can be rerolled once before picking
 
 
 class Action(Protocol):

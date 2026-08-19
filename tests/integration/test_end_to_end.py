@@ -118,3 +118,33 @@ def test_essence_exclusive_mod_solves_in_exactly_two_deterministic_steps(gamedat
         successes += traj.success
         assert traj.step_count <= 2
     assert successes == n  # deterministic once a Rare item exists -- always succeeds
+
+
+def test_desecrated_mod_is_reachable_via_a_bone_action(gamedata):
+    """Regression test for Desecration support: a genuinely Desecrated-
+    category mod (never rollable, never essence-grantable) is a valid,
+    reachable target via the matching bone family's actions."""
+    mod_id = ModId("5896")  # "#% increased Cost Efficiency of Attacks" on One Hand Sword
+    base_id = BaseId("13")  # One Hand Sword
+    assert gamedata.mods[mod_id].category is ModCategory.DESECRATED
+    assert mod_id not in gamedata.eligible_mods_for_base(base_id)  # never normally rollable
+
+    spec = TargetSpec(base="One Hand Sword", ilvl=80, target_mods=[TargetModSpec(mod_id=str(mod_id))], objective="steps", max_steps=30)
+    target = resolve_target(gamedata, spec)  # must not raise "not reachable"
+    actions = all_actions(gamedata, base_id=base_id)
+    assert any(aid.startswith("desecration_jawbone") for aid in actions)
+    s0 = start_state(gamedata, target, Rarity.NORMAL, frozenset())
+
+    rng = random.Random(5)
+    mdp = build_mdp(gamedata, target, s0, actions, rng, n_trials=300)
+    result = value_iteration(mdp, actions, objective="steps")
+    assert result.converged
+    assert -result.expected_value(s0) < 30  # a real, finite expected-steps answer, not a dead end
+
+    successes = 0
+    n = 30
+    for _ in range(n):
+        item = concretize(gamedata, target, s0, rng)
+        traj = run_trajectory(gamedata, target, actions, result.policy, item, rng, max_steps=30)
+        successes += traj.success
+    assert successes / n > 0.5  # bones have low weight-per-mod but should still mostly succeed within 30 steps

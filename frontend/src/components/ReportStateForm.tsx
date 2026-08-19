@@ -16,21 +16,13 @@ export function ReportStateForm({ sessionId, baseId, ilvl, onAdvanced }: Props) 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  function handleParsed(parsed: ParseItemResponse) {
-    if (parsed.rarity) setRarity(parsed.rarity as typeof rarity);
-    if (parsed.mods.length > 0) {
-      setCurrentMods(parsed.mods.map((m) => ({ mod_id: m.mod_id, ilvl: m.tier_ilvl })));
-    }
-  }
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  async function submitAdvance(nextRarity: typeof rarity, nextMods: SelectedMod[]) {
     setError(null);
     setLoading(true);
     try {
       const result = await api.advance(sessionId, {
-        rarity,
-        current_mods: currentMods.map((m) => ({ mod_id: m.mod_id, tier_ilvl: m.ilvl })),
+        rarity: nextRarity,
+        current_mods: nextMods.map((m) => ({ mod_id: m.mod_id, tier_ilvl: m.ilvl })),
       });
       onAdvanced(result);
     } catch (e) {
@@ -38,6 +30,27 @@ export function ReportStateForm({ sessionId, baseId, ilvl, onAdvanced }: Props) 
     } finally {
       setLoading(false);
     }
+  }
+
+  function handleParsed(parsed: ParseItemResponse) {
+    const nextRarity = parsed.rarity ? (parsed.rarity as typeof rarity) : rarity;
+    const nextMods = parsed.mods.length > 0 ? parsed.mods.map((m) => ({ mod_id: m.mod_id, ilvl: m.tier_ilvl })) : currentMods;
+    if (parsed.rarity) setRarity(nextRarity);
+    if (parsed.mods.length > 0) setCurrentMods(nextMods);
+
+    // Auto-advance on a paste that read cleanly (a rarity was found and
+    // nothing was left unmatched) -- this is the "detect a change in the
+    // pasted item and move on automatically" loop the user asked for. A
+    // parse with unmatched lines needs a human glance first, so it only
+    // pre-fills the fields and waits for the manual "Report state" click.
+    if (parsed.rarity && parsed.unmatched_lines.length === 0) {
+      void submitAdvance(nextRarity, nextMods);
+    }
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    await submitAdvance(rarity, currentMods);
   }
 
   return (

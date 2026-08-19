@@ -18,9 +18,14 @@ from __future__ import annotations
 import random
 from collections import Counter, deque
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from poe2craft.data.loader import GameData
-from poe2craft.solver.featurize import AbstractState, ResolvedTarget, abstractify, concretize
+from poe2craft.domain.ids import BaseId
+from poe2craft.solver.featurize import AbstractState, ResolvedTarget, abstractify, concretize, pick_best_candidate
+
+if TYPE_CHECKING:
+    from concurrent.futures import ProcessPoolExecutor
 
 
 @dataclass
@@ -33,6 +38,24 @@ class MDP:
     transitions: dict[tuple[AbstractState, str], dict[AbstractState, float]] = field(default_factory=dict)
 
 
+_INAPPLICABLE_PILOT = 30
+"""When none of the first `_INAPPLICABLE_PILOT` trials find `action` applicable,
+`estimate_transition` stops early rather than burning the rest of `n_trials`
+confirming the same thing. Sound for the common case -- most actions' real
+game applicability is a pure function of the abstract state (rarity/counts),
+so if it's inapplicable once, it's inapplicable for every concretization of
+that state, and the pilot only pays a fixed, small cost to discover that. A
+few actions' applicability can, rarely, depend on which specific filler mods
+a concretization happened to roll (see the module docstring) -- for those,
+this is a genuine, deliberate approximation: a true positive would need to be
+missed by all 30 pilot draws in a row to be lost, which is only plausible if
+its real hit rate is itself tiny, at which point its contribution to the
+transition estimate would have been marginal anyway. This trades a small,
+bounded amount of estimator accuracy in an already-approximate Monte Carlo
+model for a large cut in wasted work on the (typically far more common)
+actions that are structurally inapplicable in a given state."""
+
+
 def estimate_transition(
     gamedata: GameData,
     target: ResolvedTarget,
@@ -43,13 +66,18 @@ def estimate_transition(
 ) -> dict[AbstractState, float]:
     counts: Counter[AbstractState] = Counter()
     attempted = 0
-    for _ in range(n_trials):
+    pilot = min(n_trials, _INAPPLICABLE_PILOT)
+    for i in range(n_trials):
         item = concretize(gamedata, target, state, rng)
-        if not action.applicable(item):
-            continue
-        attempted += 1
-        result = action.outcome(item, rng)
-        counts[abstractify(target, result)] += 1
+        if action.applicable(item):
+            attempted += 1
+            if hasattr(action, "reveal_candidates"):
+                result = pick_best_candidate(target, state, action.reveal_candidates(item, rng), rng)
+            else:
+                result = action.outcome(item, rng)
+            counts[abstractify(target, result)] += 1
+        elif i + 1 == pilot and attempted == 0 and pilot < n_trials:
+            return {}
     if attempted == 0:
         return {}
     return {s2: c / attempted for s2, c in counts.items()}
@@ -62,7 +90,22 @@ def build_mdp(
     actions: dict[str, object],
     rng: random.Random,
     n_trials: int = 2000,
+    executor: ProcessPoolExecutor | None = None,
+    base_id: BaseId | None = None,
 ) -> MDP:
+    """`executor`, when given (with `base_id`), runs the Monte Carlo
+    estimation across worker processes instead of sequentially -- see
+    `solver.parallel.build_mdp_parallel` (imported lazily here to avoid a
+    circular import, since that module itself imports `estimate_transition`
+    from this one). Every existing caller (the CLI, every test) leaves this
+    `None` and gets this function's original, unchanged sequential behaviour;
+    only `web.crafting`'s session endpoints opt in."""
+    if executor is not None:
+        from poe2craft.solver.parallel import build_mdp_parallel
+
+        assert base_id is not None, "build_mdp(executor=...) requires base_id"
+        return build_mdp_parallel(gamedata, target, start, actions, rng, n_trials, executor, base_id)
+
     frontier: deque[AbstractState] = deque([start])
     visited: set[AbstractState] = {start}
     goal_states: set[AbstractState] = set()

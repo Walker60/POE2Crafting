@@ -164,7 +164,15 @@ further:
 
 - Does Chaos Orb's added mod preserve the removed mod's affix type, or roll
   completely freely (any prefix or suffix)?
-- Are fractured mods immune to Annulment/Chaos removal (expected: yes)?
+- ~~Are fractured mods immune to Annulment/Chaos removal (expected: yes)?~~
+  **Confirmed 2026-08-19** (web search against several PoE2 fracturing
+  guides): fractured mods are immune to Chaos Orb, Orb of Annulment, *and*
+  Divine Orb -- not just removal, a Divine Orb can't even re-randomise a
+  fractured mod's value. `AnnulmentAction`/`ChaosAction` already excluded
+  fractured mods from their removal candidates; `DivineAction.outcome` didn't
+  skip them for its value reroll, fixed. Currently a no-op in practice either
+  way (the solver doesn't track rolled values, only tiers), but correct now
+  regardless.
 - Perfect Essence: if its guaranteed added mod's exclusion group collides with
   a mod that *wasn't* the one randomly removed, what happens (is that outcome
   simply excluded from the removal-choice distribution, or can it fail)?
@@ -352,3 +360,75 @@ A handful of essences grant 2-3 mods simultaneously on certain bases
 (hybrid essences) -- `EssenceAction` adds all of a grant's mods in one
 application and checks room/group-exclusion for all of them jointly before
 considering itself applicable.
+
+## Desecration (bones)
+
+`ModCategory.DESECRATED` mods (~204 of them, CoE `id_mgroup=10`) were parsed
+and carried through the compiled gamedata from day one but had no action able
+to place one -- confirmed unimplemented in `domain/mods.py`'s own comment
+("never sampled by engine.pool"). poe2db.tw doesn't document this mechanic at
+all (checked directly, 2026-08-19), so everything below was confirmed against
+several current PoE2 guides instead of the project's usual primary sources.
+
+**The mechanic**: apply one of 12 "bone" items (4 slot families x 3 tiers) to
+a Rare item of the matching family -> 3 random Desecrated modifiers are
+revealed, the player picks 1 to actually apply (as a normal prefix/suffix,
+occupying a real slot; if the item already has 6 affixes, one random
+non-fractured affix is removed first to make room). This is the first action
+in this codebase where the outcome is a *choice* among several random
+candidates rather than a single random draw or removal -- modeled by
+`solver.featurize.pick_best_candidate`: whichever revealed candidate improves
+the most currently-unsatisfied target-mod statuses wins, ties (including
+"none of them help") broken uniformly at random. Used by both
+`solver.model_learning.estimate_transition` (learning the transition model)
+and `solver.playback.run_trajectory` (replaying a solved policy against the
+real sampler) -- both call `action.reveal_candidates(item, rng)` instead of
+`action.outcome(item, rng)` whenever an action exposes that method.
+
+**Slot families** (`engine.apply._bone_family_matches`): Jawbone = one/two-
+handed weapons + Quiver, Rib = Body Armour/Boots/Gloves/Helmets, Collarbone =
+Amulet/Ring/Belt, Cranium = Jewels -- all four directly confirmed by name
+across multiple guides. **Not confirmed, an inference from the compiled data
+itself**: Shield and Focus (both in this project's "Offhands" bgroup
+alongside Quiver) also carry real Desecrated tier data in the vendored
+dataset, and since Quiver's is already explained by Jawbone, something must
+be able to reach Shield/Focus's -- Rib ("armour") is the closest fit given
+Shields/Focus are conventionally defensive gear like the four core armour
+slots, so they're mapped to Rib. Revisit if a source specifically documents
+this differently.
+
+**Tiers**: Gnawed (cheap, only usable on an item **ilvl <= 64**) -> Preserved
+(no restriction) -> Ancient (guarantees the revealed mod's own tier requires
+**ilvl >= 40**, the same `min_ilvl` shape as Greater/Perfect currency tiers).
+
+**Omens**: Sinistral/Dextral Necromancy (restrict the reveal to
+prefixes/suffixes only) and Abyssal Echoes (reroll the 3 options once before
+picking, modeled as revealing 6 candidates and picking the best of all 6 --
+equivalent to a rational player only rerolling when nothing in the first 3
+helps) are both wrapped onto the Preserved tier only, matching this
+project's existing convention of not cross-producing every omen with every
+tier (e.g. Regal/Exalted's Sinistral/Dextral/Homogenising omens are likewise
+only ever built at `CurrencyTier.BASE`). **Deliberately out of scope**, same
+bar as previously-deferred niche omens: Altered Collarbone (a rare Genesis-
+Tree-only variant, not a standard drop) and Omen of Blackblooded/Liege/
+Sovereign (restricts to "Lich" modifiers -- no confirmed tag data exists to
+classify mods that way).
+
+**Newly unblocked**: Omen of Light ("next Annulment only removes a Desecrated
+modifier") was deferred specifically because Desecrated-mod support didn't
+exist (`OmenKind`'s docstring said so directly) -- implemented as
+`AnnulmentAction(restrict_category=ModCategory.DESECRATED)` alongside this
+work, since the infrastructure was already being touched.
+
+**Pricing bug found and fixed while pricing bones**: `poe2db_parse.
+parse_economy_divine` only handled rows shaped "`<name> <-> 1 Divine Orb`"
+(cheap items) and silently dropped the inverse "`1 <name> <-> N Divine Orb`"
+format used for anything pricier than 1 Divine -- several bones (Ancient
+tier) and Omen of Light are priced that way. Fixed by reading both sides of
+the ratio generically (`divine_cost = qty_divine / qty_item`) instead of
+requiring one side to equal exactly "1". Confirmed fixed against the real
+vendored economy page: Ancient Jawbone (2.83), Ancient Collarbone (4.76),
+Ancient Rib (3.74), Preserved Cranium (9.42), and Omen of Light (8.57) all
+now resolve to real prices instead of the fallback. Gnawed/Ancient Cranium
+remain unpriced (genuinely absent from the vendored snapshot, not a parsing
+gap) -- same honest fallback behavior as Fracturing Orb.

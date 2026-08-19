@@ -43,16 +43,24 @@ _TAG_RE = re.compile(r"<[^>]+>")
 def parse_economy_divine(html: str) -> dict[str, float]:
     """Parses poe2db.tw's "Economy_divine" page: a live-updated table of every
     traded currency/omen/essence/unique paired against Divine Orb, as
-    "<24h Value> <name> <-> 1 Divine Orb <24h volume traded>". "24h Value" is
-    how many units of that item trade for 1 Divine Orb -- confirmed against a
-    known real-world ratio (Chaos Orb came back ~10 per Divine, matching
-    expectations; a naive wrong-column read earlier in this project's
-    research gave a nonsensical ~685,000 per Divine, which is how this was
-    caught and fixed before landing here).
+    "<qty_item> <name> <-> <qty_divine> Divine Orb <24h volume traded>".
+    Confirmed against a known real-world ratio (Chaos Orb came back ~10 per
+    Divine, matching expectations; a naive wrong-column read earlier in this
+    project's research gave a nonsensical ~685,000 per Divine, which is how
+    this was caught and fixed before landing here).
 
-    Returns {name: divine_cost}, i.e. already inverted (divine_cost = 1 /
-    units_per_divine) so callers get "how much this one use costs in Divine
-    Orb terms" directly. Names are exactly as displayed (e.g. "Chaos Orb",
+    Cheap items (worth less than 1 Divine) are shown as "24 Chaos Orb <-> 1
+    Divine Orb" (`qty_divine == 1`); items pricier than 1 Divine are instead
+    shown as "1 Ancient Collarbone <-> 4.76 Divine Orb" (`qty_item == 1`) --
+    both are the exact same ratio read generically (divine_cost = qty_divine
+    / qty_item), so no direction-specific branching is needed. An earlier
+    version of this parser required `qty_divine == 1` exactly, which silently
+    dropped every row priced above 1 Divine (several bones, Omen of Light)
+    rather than mis-parsing them -- caught while implementing Desecration
+    support, which needed those exact prices.
+
+    Returns {name: divine_cost} -- "how much one use costs in Divine Orb
+    terms" directly. Names are exactly as displayed (e.g. "Chaos Orb",
     "Greater Chaos Orb", "Omen of Whittling", "Perfect Essence of the Body"),
     matching this project's own Action.name strings for the currencies/omens
     it models. Rows this project doesn't otherwise use (unique items, runes,
@@ -61,14 +69,15 @@ def parse_economy_divine(html: str) -> dict[str, float]:
     for row in _ROW_RE.findall(html):
         text = _TAG_RE.sub("|", row)
         parts = [p.strip() for p in re.sub(r"\|+", "|", text).strip("|").split("|") if p.strip()]
-        if len(parts) < 4 or parts[2] != "1" or parts[3] != "Divine Orb":
+        if len(parts) < 4 or parts[3] != "Divine Orb":
             continue
         try:
-            units_per_divine = float(parts[0].replace(",", ""))
+            qty_item = float(parts[0].replace(",", ""))
+            qty_divine = float(parts[2].replace(",", ""))
         except ValueError:
             continue
-        if units_per_divine <= 0:
+        if qty_item <= 0 or qty_divine <= 0:
             continue
-        prices.setdefault(parts[1], 1.0 / units_per_divine)
+        prices.setdefault(parts[1], qty_divine / qty_item)
     prices.setdefault("Divine Orb", 1.0)
     return prices

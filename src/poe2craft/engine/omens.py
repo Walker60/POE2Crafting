@@ -16,7 +16,7 @@ from __future__ import annotations
 from poe2craft.data.loader import GameData
 from poe2craft.domain.actions import OmenKind
 from poe2craft.domain.ids import BaseId
-from poe2craft.domain.mods import Affix
+from poe2craft.domain.mods import Affix, ModCategory
 from poe2craft.engine.apply import (
     AlchemyAction,
     AnnulmentAction,
@@ -24,6 +24,7 @@ from poe2craft.engine.apply import (
     ExaltedAction,
     RegalAction,
     build_action_registry,
+    desecration_actions_for,
     essence_actions_for,
 )
 
@@ -48,6 +49,7 @@ def omen_wrapped_actions(gamedata: GameData) -> dict[str, object]:
         "annulment_omen_dextral": AnnulmentAction(gamedata, restrict=_RESTRICTION[OmenKind.DEXTRAL_ANNULMENT]),
         "annulment_omen_sinistral": AnnulmentAction(gamedata, restrict=_RESTRICTION[OmenKind.SINISTRAL_ANNULMENT]),
         "annulment_omen_greater": AnnulmentAction(gamedata, count=2),
+        "annulment_omen_light": AnnulmentAction(gamedata, restrict_category=ModCategory.DESECRATED),
         "exalted_omen_dextral": ExaltedAction(gamedata, restrict=_RESTRICTION[OmenKind.DEXTRAL_EXALTATION]),
         "exalted_omen_sinistral": ExaltedAction(gamedata, restrict=_RESTRICTION[OmenKind.SINISTRAL_EXALTATION]),
         "exalted_omen_greater": ExaltedAction(gamedata, count=2),
@@ -72,4 +74,5 @@ def all_actions(gamedata: GameData, base_id: BaseId | None = None) -> dict[str, 
     actions = {**build_action_registry(gamedata), **omen_wrapped_actions(gamedata)}
     if base_id is not None:
         actions.update(essence_actions_for(gamedata, base_id))
+        actions.update(desecration_actions_for(gamedata, base_id))
     return actions

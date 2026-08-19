@@ -118,3 +118,18 @@ def test_divine_rerolls_values_but_not_mod_identity(gamedata):
     result = action.outcome(item, random.Random(9))
     assert result.prefixes[0].mod_id == ModId("p1")
     assert 10.0 <= result.prefixes[0].values[0] <= 20.0
+
+
+def test_divine_never_rerolls_a_fractured_mods_value(gamedata):
+    from poe2craft.domain.items import RolledAffix
+
+    # Confirmed against real PoE2 fracturing mechanics: a fractured mod's
+    # roll is permanent -- a Divine Orb can't even re-randomise its value.
+    p1 = RolledAffix(
+        mod_id=ModId("p1"), affix=Affix.PREFIX, group_keys=frozenset({"groupX"}),
+        value_ranges=((10.0, 20.0),), values=(15.0,), fractured=True,
+    )
+    item = _item(gamedata, rarity=Rarity.RARE, prefixes=(p1,))
+    action = DivineAction(gamedata)
+    result = action.outcome(item, random.Random(9))
+    assert result.prefixes[0].values == (15.0,)

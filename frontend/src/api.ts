@@ -123,6 +123,19 @@ export interface CostSpreadResponse {
   unit: string;
 }
 
+export interface TradeComparisonResponse {
+  league: string;
+  craft_cost: number;
+  buy_price: number | null;
+  buy_price_n_listings: number;
+  sell_value: number | null;
+  sell_value_n_listings: number;
+  sell_and_restart_net_cost: number | null;
+  recommendation: 'keep_crafting' | 'buy' | 'sell_and_restart' | 'insufficient_data';
+  caveats: string[];
+  unit: string;
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const resp = await fetch(path, {
     headers: { 'Content-Type': 'application/json' },
@@ -170,4 +183,9 @@ export const api = {
     request<CostSpreadResponse>(
       `/api/sessions/${encodeURIComponent(sessionId)}/cost-spread${nRollouts ? `?n_rollouts=${nRollouts}` : ''}`
     ),
+  // Hits the live pathofexile.com/trade2 API server-side -- only ever call
+  // this from an explicit user action (a button click), never automatically
+  // or on a timer. See docs/data_provenance.md.
+  tradeCompare: (sessionId: string) =>
+    request<TradeComparisonResponse>(`/api/sessions/${encodeURIComponent(sessionId)}/trade-compare`, { method: 'POST' }),
 };

@@ -41,6 +41,84 @@ class GameData:
     page. Missing from this dict for any name not currently traded there --
     callers should fall back to a placeholder, not assume every name is
     covered."""
+    # Memoizes rollable_entries() below, keyed by its own arguments (excluding
+    # self) -- see that method's docstring for why. `compare=False`/`repr=False`
+    # so this purely-internal cache never affects equality or dataclass repr.
+    # Populated lazily; a harmless, GIL-safe race across threads at worst
+    # recomputes the same value twice, never reads a partial one (see
+    # `web/session.py`'s docstring for this project's general stance on
+    # locking only where real correctness is at stake, not just concurrency).
+    _pool_cache: dict[tuple, list[tuple[ModDef, ModTierEntry]]] = field(
+        default_factory=dict, compare=False, repr=False
+    )
+    # Same purpose as `_pool_cache`, kept separate rather than adding a
+    # category parameter to `rollable_entries` -- that method iterates
+    # `eligible_mods_for_base` (NORMAL-only), while this one iterates
+    # `all_tiers_by_base` filtered to DESECRATED, a genuinely different source
+    # dict, not just a different filter on the same one.
+    _desecrated_pool_cache: dict[tuple, list[tuple[ModDef, ModTierEntry]]] = field(
+        default_factory=dict, compare=False, repr=False
+    )
+
+    def rollable_entries(
+        self,
+        base_id: BaseId,
+        affix: Affix,
+        max_ilvl: int,
+        min_ilvl: int = 0,
+        required_tags: frozenset[str] | None = None,
+    ) -> list[tuple[ModDef, ModTierEntry]]:
+        """The group-exclusion-agnostic part of `engine.pool.build_pool`'s
+        eligibility filter (affix/ilvl/tags), cached by its own arguments.
+
+        This exists because `build_pool` is called millions of times over a
+        single solve (once per filler-mod placement, per Monte Carlo trial,
+        per (state, action) pair explored) with the *same* (base_id, affix,
+        item.ilvl, min_ilvl, required_tags) tuple every time within one solve
+        -- only the item's currently-occupied groups differ call to call.
+        Recomputing this dict-iteration-plus-per-tier-ilvl-check from scratch
+        on every call was the dominant cost of a real solve (profiled: ~90s of
+        a ~195s solve). `build_pool` still applies the group-exclusion filter
+        itself, per call, against this cached (mod, tier) list."""
+        key = (base_id, affix, max_ilvl, min_ilvl, required_tags)
+        cached = self._pool_cache.get(key)
+        if cached is not None:
+            return cached
+        entries: list[tuple[ModDef, ModTierEntry]] = []
+        for mod_id, tiers in self.eligible_mods_for_base(base_id).items():
+            mod = self.mods[mod_id]
+            if mod.affix is not affix:
+                continue
+            if required_tags is not None and not (mod.tags & required_tags):
+                continue
+            for tier in tiers:
+                if min_ilvl <= tier.ilvl <= max_ilvl and tier.weight > 0:
+                    entries.append((mod, tier))
+        self._pool_cache[key] = entries
+        return entries
+
+    def desecrated_entries(
+        self, base_id: BaseId, affix: Affix, max_ilvl: int, min_ilvl: int = 0
+    ) -> list[tuple[ModDef, ModTierEntry]]:
+        """Like `rollable_entries`, but for `ModCategory.DESECRATED` mods --
+        the "reveal 3, pick 1" pool a Desecration bone action draws from
+        (see `engine.pool.build_desecrated_pool`). Desecrated tiers are only
+        present in `all_tiers_by_base` (the NORMAL-only rollable pool never
+        includes them), so this can't reuse `rollable_entries`."""
+        key = (base_id, affix, max_ilvl, min_ilvl)
+        cached = self._desecrated_pool_cache.get(key)
+        if cached is not None:
+            return cached
+        entries: list[tuple[ModDef, ModTierEntry]] = []
+        for mod_id, tiers in self.all_tiers_by_base.get(base_id, {}).items():
+            mod = self.mods[mod_id]
+            if mod.category is not ModCategory.DESECRATED or mod.affix is not affix:
+                continue
+            for tier in tiers:
+                if min_ilvl <= tier.ilvl <= max_ilvl and tier.weight > 0:
+                    entries.append((mod, tier))
+        self._desecrated_pool_cache[key] = entries
+        return entries
 
     def base_group_of(self, base_id: BaseId) -> BaseGroup:
         return self.base_groups[self.bases[base_id].bgroup_id]

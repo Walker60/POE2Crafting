@@ -36,7 +36,7 @@ from poe2craft.data.loader import GameData
 from poe2craft.data.schemas import TargetSpec
 from poe2craft.domain.ids import BaseId, GroupKey, ModId
 from poe2craft.domain.items import Item, Rarity, RolledAffix
-from poe2craft.domain.mods import Affix
+from poe2craft.domain.mods import Affix, ModCategory
 from poe2craft.engine.pool import MAGIC_MAX_PER_AFFIX, build_pool
 from poe2craft.engine.sampler import roll_values, weighted_pick
 
@@ -66,12 +66,14 @@ def resolve_target(gamedata: GameData, spec: TargetSpec) -> ResolvedTarget:
         raise TargetResolutionError(f"unknown base {spec.base!r}")
     base = matches[0]
     rollable = gamedata.eligible_mods_for_base(base.id)
-    # A target mod is reachable either by normal weighted rolling (rollable,
-    # above) or by some essence guaranteeing it for this base -- essences are
-    # the only way to reach the essence-exclusive mod pool, so a mod only
-    # obtainable that way must still be a valid target.
-    essence_grantable = {g.mod_id for e in gamedata.essences for g in e.per_base.get(base.id, ())}
     all_tiers = gamedata.all_tiers_by_base.get(base.id, {})
+    # A target mod is reachable by normal weighted rolling (rollable, above),
+    # by some essence guaranteeing it for this base, or -- Desecration bones
+    # -- by it being a Desecrated-category mod with tier data for this base
+    # (any base a bone's slot family matches can reveal it; a mod only
+    # obtainable one of these ways must still be a valid target).
+    essence_grantable = {g.mod_id for e in gamedata.essences for g in e.per_base.get(base.id, ())}
+    desecrated_reachable = {mid for mid, tiers in all_tiers.items() if tiers and gamedata.mods[mid].category is ModCategory.DESECRATED}
 
     requirements: list[TargetModRequirement] = []
     seen: set[ModId] = set()
@@ -79,10 +81,10 @@ def resolve_target(gamedata: GameData, spec: TargetSpec) -> ResolvedTarget:
         mid = ModId(tm.mod_id)
         if mid not in gamedata.mods:
             raise TargetResolutionError(f"unknown mod id {tm.mod_id!r}")
-        if mid not in rollable and mid not in essence_grantable:
+        if mid not in rollable and mid not in essence_grantable and mid not in desecrated_reachable:
             raise TargetResolutionError(
-                f"mod {tm.mod_id!r} ({gamedata.mods[mid].name!r}) is not reachable (rollable or "
-                f"essence-grantable) on base {spec.base!r}"
+                f"mod {tm.mod_id!r} ({gamedata.mods[mid].name!r}) is not reachable (rollable, essence-grantable, "
+                f"or Desecrated) on base {spec.base!r}"
             )
         if mid in seen:
             raise TargetResolutionError("target_mods contains duplicates")
@@ -162,6 +164,31 @@ def abstractify(target: ResolvedTarget, item: Item) -> AbstractState:
     return AbstractState(
         rarity=item.rarity, prefix_count=item.prefix_count, suffix_count=item.suffix_count, status=tuple(status)
     )
+
+
+def pick_best_candidate(target: ResolvedTarget, state: AbstractState, candidates: list[Item], rng: random.Random) -> Item:
+    """Models a rational player choosing among several revealed options --
+    Desecration's "reveal 3 (or 6, with Omen of Abyssal Echoes), pick 1" is
+    the first action in this codebase where the outcome is a *choice* rather
+    than a single random draw (see `engine.apply.DesecrationAction`). Used by
+    both `solver.model_learning.estimate_transition` (learning the abstract
+    transition model) and `solver.playback.run_trajectory` (replaying a
+    solved policy against the real sampler) -- any action exposing
+    `reveal_candidates` needs the same "pick whichever helps most" logic in
+    both places, or the two would disagree about what the policy actually
+    does.
+
+    Whichever candidate improves the most currently-unsatisfied target-mod
+    statuses wins; ties (including "none of them help at all") are broken
+    uniformly at random via `rng`, since the abstraction can't distinguish
+    between equally-irrelevant filler picks -- exactly how every other action
+    already treats an uncontrolled filler."""
+    scored = [
+        (sum(1 for new, old in zip(abstractify(target, c).status, state.status) if new > old), c) for c in candidates
+    ]
+    best_score = max(score for score, _ in scored)
+    best = [c for score, c in scored if score == best_score]
+    return rng.choice(best)
 
 
 class ItemReportError(ValueError):

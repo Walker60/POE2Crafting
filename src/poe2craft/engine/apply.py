@@ -16,13 +16,13 @@ import dataclasses
 import random
 
 from poe2craft.data.loader import GameData
-from poe2craft.domain.actions import ActionKind, CurrencyTier
+from poe2craft.domain.actions import ActionKind, BoneFamily, BoneTier, CurrencyTier
 from poe2craft.domain.essences import EssenceDef
 from poe2craft.domain.ids import BaseId
 from poe2craft.domain.items import Item, Rarity, RolledAffix
-from poe2craft.domain.mods import Affix
-from poe2craft.engine.pool import build_combined_pool, build_pool, has_room, item_tags
-from poe2craft.engine.sampler import roll_new_affix, roll_new_affix_any, roll_values
+from poe2craft.domain.mods import Affix, ModCategory
+from poe2craft.engine.pool import build_combined_pool, build_desecrated_pool, build_pool, has_room, item_tags
+from poe2craft.engine.sampler import roll_new_affix, roll_new_affix_any, roll_values, weighted_sample_without_replacement
 
 FALLBACK_ESSENCE_COST = 0.09
 """Fallback Divine-Orb cost for an essence not in the live price snapshot (53
@@ -54,6 +54,14 @@ DEFAULT_COSTS: dict[ActionKind, float] = {
     ActionKind.FRACTURE: 0.05,
     ActionKind.ESSENCE: FALLBACK_ESSENCE_COST,
     ActionKind.PERFECT_ESSENCE: FALLBACK_ESSENCE_COST,
+    # Real per-bone prices (confirmed via poe2db.tw's economy page for
+    # Jawbone/Collarbone at least, 2026-08-19) span a wide range by tier --
+    # this only ever applies to whichever specific bone name isn't in the
+    # live snapshot (e.g. Rib/Cranium, not yet confirmed priced there), so
+    # it's calibrated to the Preserved tier (the "no restriction" baseline)
+    # rather than trying to average across Gnawed/Ancient's very different
+    # price points.
+    ActionKind.DESECRATION: 0.1,
 }
 
 MIN_ILVL_BY_TIER: dict[ActionKind, dict[CurrencyTier, int]] = {
@@ -108,19 +116,13 @@ def _tiered_price(gamedata: GameData, base_currency_name: str, tier: CurrencyTie
     return DEFAULT_COSTS[kind] * TIER_COST_MULTIPLIER[tier]
 
 
-def _omen_suffix(count: int = 1, restrict: Affix | None = None, extra: str | None = None, count_verb: str = "") -> str:
-    """Builds the "(Omen: ...)" name suffix for an omen-wrapped action from
-    whichever of its modifiers are active, so a combination of modifiers
-    (should one ever be constructed) renders sensibly instead of needing a
-    separate hardcoded string per combination."""
-    parts = []
-    if count > 1:
-        parts.append(f"{count_verb} {count}".strip())
-    if extra:
-        parts.append(extra)
-    if restrict is not None:
-        parts.append(f"{restrict.value}es only")
-    return f" (Omen: {', '.join(parts)})" if parts else ""
+def _with_omen(base_name: str, omen_name: str | None) -> str:
+    """Appends an omen-wrapped action's real in-game omen name (e.g. "Omen of
+    Sinistral Alchemy") to its base currency name for display -- the same
+    name each class's own `cost()` already prices under, not a separately
+    invented shorthand, so what's shown is exactly what a player needs to buy
+    and use."""
+    return base_name if omen_name is None else f"{base_name} ({omen_name})"
 
 
 def _add_affix(item: Item, new_affix) -> Item:
@@ -202,18 +204,22 @@ class AlchemyAction:
         # affix side first, then fills the remaining slots (still 4 total)
         # from whatever's left -- not a separate roll pool, just an ordering.
         self.priority = priority
-        self.name = "Orb of Alchemy" if priority is None else f"Orb of Alchemy (Omen: max {priority.value}es)"
+        self.name = _with_omen("Orb of Alchemy", self._omen_name())
+
+    def _omen_name(self) -> str | None:
+        if self.priority is Affix.PREFIX:
+            return "Omen of Sinistral Alchemy"
+        if self.priority is Affix.SUFFIX:
+            return "Omen of Dextral Alchemy"
+        return None
 
     def applicable(self, item: Item) -> bool:
         return item.rarity is Rarity.NORMAL
 
     def cost(self) -> float:
         base = _price(self._gd, "Orb of Alchemy", DEFAULT_COSTS[self.kind])
-        if self.priority is Affix.PREFIX:
-            return base + _price(self._gd, "Omen of Sinistral Alchemy", FALLBACK_OMEN_COST)
-        if self.priority is Affix.SUFFIX:
-            return base + _price(self._gd, "Omen of Dextral Alchemy", FALLBACK_OMEN_COST)
-        return base
+        omen = self._omen_name()
+        return base + _price(self._gd, omen, FALLBACK_OMEN_COST) if omen else base
 
     def outcome(self, item: Item, rng: random.Random) -> Item:
         item = dataclasses.replace(item, rarity=Rarity.RARE)
@@ -252,9 +258,16 @@ class RegalAction:
         # tags at all, since there's then no "existing modifier" type to match.
         self.homogenising = homogenising
         self.min_ilvl = MIN_ILVL_BY_TIER[self.kind][tier]
-        name = f"{_TIER_NAME_PREFIX[tier]}Regal Orb"
-        extra = "same type as existing" if homogenising else None
-        self.name = f"{name}{_omen_suffix(restrict=restrict, extra=extra)}"
+        self.name = _with_omen(f"{_TIER_NAME_PREFIX[tier]}Regal Orb", self._omen_name())
+
+    def _omen_name(self) -> str | None:
+        if self.restrict is Affix.PREFIX:
+            return "Omen of Sinistral Coronation"
+        if self.restrict is Affix.SUFFIX:
+            return "Omen of Dextral Coronation"
+        if self.homogenising:
+            return "Omen of Homogenising Coronation"
+        return None
 
     def _required_tags(self, item: Item) -> frozenset[str] | None:
         return item_tags(self._gd, item) or None if self.homogenising else None
@@ -277,13 +290,8 @@ class RegalAction:
 
     def cost(self) -> float:
         base = _tiered_price(self._gd, "Regal Orb", self.tier, self.kind)
-        if self.restrict is Affix.PREFIX:
-            return base + _price(self._gd, "Omen of Sinistral Coronation", FALLBACK_OMEN_COST)
-        if self.restrict is Affix.SUFFIX:
-            return base + _price(self._gd, "Omen of Dextral Coronation", FALLBACK_OMEN_COST)
-        if self.homogenising:
-            return base + _price(self._gd, "Omen of Homogenising Coronation", FALLBACK_OMEN_COST)
-        return base
+        omen = self._omen_name()
+        return base + _price(self._gd, omen, FALLBACK_OMEN_COST) if omen else base
 
     def outcome(self, item: Item, rng: random.Random) -> Item:
         required_tags = self._required_tags(item)
@@ -311,8 +319,10 @@ class DivineAction:
     def outcome(self, item: Item, rng: random.Random) -> Item:
         # Rerolls each existing affix's numeric value within its own already-
         # assigned tier -- mod identity never changes. See docs/design_notes.md:
-        # this is a near no-op for v1's presence-only abstraction.
-        reroll = lambda a: dataclasses.replace(a, values=roll_values(a.value_ranges, rng))
+        # this is a near no-op for v1's presence-only abstraction. Fractured
+        # mods are skipped -- confirmed a Divine Orb can't even re-randomise
+        # a fractured mod's value, the roll you fractured is permanent.
+        reroll = lambda a: a if a.fractured else dataclasses.replace(a, values=roll_values(a.value_ranges, rng))
         return dataclasses.replace(
             item,
             prefixes=tuple(reroll(a) for a in item.prefixes),
@@ -323,29 +333,52 @@ class DivineAction:
 class AnnulmentAction:
     kind = ActionKind.ANNULMENT
 
-    def __init__(self, gamedata: GameData, restrict: Affix | None = None, count: int = 1):
+    def __init__(
+        self,
+        gamedata: GameData,
+        restrict: Affix | None = None,
+        count: int = 1,
+        restrict_category: ModCategory | None = None,
+    ):
         self._gd = gamedata
         self.restrict = restrict
         self.count = count
+        # Omen of Light: restricts removal to Desecrated modifiers only --
+        # meaningless combined with restrict/count (the registry never
+        # constructs it that way), a separate axis from the affix-type and
+        # count omens.
+        self.restrict_category = restrict_category
         # Omen of Greater Annulment: removes `count` (2) modifiers instead of
         # 1, falling back to however many candidates actually exist if fewer.
-        self.name = f"Orb of Annulment{_omen_suffix(count=count, restrict=restrict, count_verb='removes')}"
+        self.name = _with_omen("Orb of Annulment", self._omen_name())
+
+    def _omen_name(self) -> str | None:
+        if self.count > 1:
+            return "Omen of Greater Annulment"
+        if self.restrict_category is ModCategory.DESECRATED:
+            return "Omen of Light"
+        if self.restrict is Affix.PREFIX:
+            return "Omen of Sinistral Annulment"
+        if self.restrict is Affix.SUFFIX:
+            return "Omen of Dextral Annulment"
+        return None
 
     def _candidates(self, item: Item):
-        return [a for a in item.affixes if not a.fractured and (self.restrict is None or a.affix is self.restrict)]
+        return [
+            a
+            for a in item.affixes
+            if not a.fractured
+            and (self.restrict is None or a.affix is self.restrict)
+            and (self.restrict_category is None or self._gd.mods[a.mod_id].category is self.restrict_category)
+        ]
 
     def applicable(self, item: Item) -> bool:
         return item.rarity in (Rarity.MAGIC, Rarity.RARE) and bool(self._candidates(item))
 
     def cost(self) -> float:
         base = _price(self._gd, "Orb of Annulment", DEFAULT_COSTS[self.kind])
-        if self.count > 1:
-            return base + _price(self._gd, "Omen of Greater Annulment", FALLBACK_OMEN_COST)
-        if self.restrict is Affix.PREFIX:
-            return base + _price(self._gd, "Omen of Sinistral Annulment", FALLBACK_OMEN_COST)
-        if self.restrict is Affix.SUFFIX:
-            return base + _price(self._gd, "Omen of Dextral Annulment", FALLBACK_OMEN_COST)
-        return base
+        omen = self._omen_name()
+        return base + _price(self._gd, omen, FALLBACK_OMEN_COST) if omen else base
 
     def outcome(self, item: Item, rng: random.Random) -> Item:
         for _ in range(self.count):
@@ -374,8 +407,16 @@ class ChaosAction:
         # instead of a uniformly random one.
         self.pick_lowest = pick_lowest
         self.min_ilvl = MIN_ILVL_BY_TIER[self.kind][tier]
-        extra = "lowest level" if pick_lowest else None
-        self.name = f"{_TIER_NAME_PREFIX[tier]}Chaos Orb{_omen_suffix(restrict=restrict, extra=extra)}"
+        self.name = _with_omen(f"{_TIER_NAME_PREFIX[tier]}Chaos Orb", self._omen_name())
+
+    def _omen_name(self) -> str | None:
+        if self.pick_lowest:
+            return "Omen of Whittling"
+        if self.restrict is Affix.PREFIX:
+            return "Omen of Sinistral Erasure"
+        if self.restrict is Affix.SUFFIX:
+            return "Omen of Dextral Erasure"
+        return None
 
     def _candidates(self, item: Item):
         return [a for a in item.affixes if not a.fractured and (self.restrict is None or a.affix is self.restrict)]
@@ -385,13 +426,8 @@ class ChaosAction:
 
     def cost(self) -> float:
         base = _tiered_price(self._gd, "Chaos Orb", self.tier, self.kind)
-        if self.pick_lowest:
-            return base + _price(self._gd, "Omen of Whittling", FALLBACK_OMEN_COST)
-        if self.restrict is Affix.PREFIX:
-            return base + _price(self._gd, "Omen of Sinistral Erasure", FALLBACK_OMEN_COST)
-        if self.restrict is Affix.SUFFIX:
-            return base + _price(self._gd, "Omen of Dextral Erasure", FALLBACK_OMEN_COST)
-        return base
+        omen = self._omen_name()
+        return base + _price(self._gd, omen, FALLBACK_OMEN_COST) if omen else base
 
     def _pick_removal(self, item: Item, rng: random.Random):
         candidates = self._candidates(item)
@@ -434,9 +470,18 @@ class ExaltedAction:
         # item has no mods, or none of them have any tag at all.
         self.homogenising = homogenising
         self.min_ilvl = MIN_ILVL_BY_TIER[self.kind][tier]
-        name = f"{_TIER_NAME_PREFIX[tier]}Exalted Orb"
-        extra = "same type as existing" if homogenising else None
-        self.name = f"{name}{_omen_suffix(count=count, restrict=restrict, extra=extra, count_verb='adds')}"
+        self.name = _with_omen(f"{_TIER_NAME_PREFIX[tier]}Exalted Orb", self._omen_name())
+
+    def _omen_name(self) -> str | None:
+        if self.count > 1:
+            return "Omen of Greater Exaltation"
+        if self.homogenising:
+            return "Omen of Homogenising Exaltation"
+        if self.restrict is Affix.PREFIX:
+            return "Omen of Sinistral Exaltation"
+        if self.restrict is Affix.SUFFIX:
+            return "Omen of Dextral Exaltation"
+        return None
 
     def _required_tags(self, item: Item) -> frozenset[str] | None:
         return item_tags(self._gd, item) or None if self.homogenising else None
@@ -455,15 +500,8 @@ class ExaltedAction:
 
     def cost(self) -> float:
         base = _tiered_price(self._gd, "Exalted Orb", self.tier, self.kind)
-        if self.count > 1:
-            return base + _price(self._gd, "Omen of Greater Exaltation", FALLBACK_OMEN_COST)
-        if self.homogenising:
-            return base + _price(self._gd, "Omen of Homogenising Exaltation", FALLBACK_OMEN_COST)
-        if self.restrict is Affix.PREFIX:
-            return base + _price(self._gd, "Omen of Sinistral Exaltation", FALLBACK_OMEN_COST)
-        if self.restrict is Affix.SUFFIX:
-            return base + _price(self._gd, "Omen of Dextral Exaltation", FALLBACK_OMEN_COST)
-        return base
+        omen = self._omen_name()
+        return base + _price(self._gd, omen, FALLBACK_OMEN_COST) if omen else base
 
     def outcome(self, item: Item, rng: random.Random) -> Item:
         for _ in range(self.count):
@@ -545,11 +583,18 @@ class EssenceAction:
         # essences (they don't remove anything) -- essence_actions_for only
         # ever constructs this for Perfect essences.
         self.restrict = restrict
-        self.name = essence.name if restrict is None else f"{essence.name}{_omen_suffix(restrict=restrict)}"
+        self.name = _with_omen(essence.name, self._omen_name())
         self.grants = essence.per_base.get(base_id, ())
         self.perfect = essence.is_perfect
         if self.perfect:
             self.kind = ActionKind.PERFECT_ESSENCE
+
+    def _omen_name(self) -> str | None:
+        if self.restrict is Affix.PREFIX:
+            return "Omen of Sinistral Crystallisation"
+        if self.restrict is Affix.SUFFIX:
+            return "Omen of Dextral Crystallisation"
+        return None
 
     def _needed_group_keys(self) -> frozenset:
         keys: set = set()
@@ -585,11 +630,8 @@ class EssenceAction:
 
     def cost(self) -> float:
         base = _price(self._gd, self.essence.name, DEFAULT_COSTS[self.kind])
-        if self.restrict is Affix.PREFIX:
-            return base + _price(self._gd, "Omen of Sinistral Crystallisation", FALLBACK_OMEN_COST)
-        if self.restrict is Affix.SUFFIX:
-            return base + _price(self._gd, "Omen of Dextral Crystallisation", FALLBACK_OMEN_COST)
-        return base
+        omen = self._omen_name()
+        return base + _price(self._gd, omen, FALLBACK_OMEN_COST) if omen else base
 
     def _add_all_grants(self, item: Item, rng: random.Random) -> Item:
         for g in self.grants:
@@ -621,6 +663,166 @@ def essence_actions_for(gamedata: GameData, base_id: BaseId) -> dict[str, object
         if essence.is_perfect:
             out[f"essence_{essence.id}_omen_dextral"] = EssenceAction(gamedata, essence, base_id, restrict=Affix.SUFFIX)
             out[f"essence_{essence.id}_omen_sinistral"] = EssenceAction(gamedata, essence, base_id, restrict=Affix.PREFIX)
+    return out
+
+
+_BONE_FAMILY_BGROUPS: dict[BoneFamily, frozenset[str]] = {
+    BoneFamily.JAWBONE: frozenset({"One-Handed Weapons", "Two-Handed Weapons"}),
+    BoneFamily.RIB: frozenset({"Body Armours", "Boots", "Gloves", "Helmets"}),
+    BoneFamily.COLLARBONE: frozenset({"Jewellery"}),
+    BoneFamily.CRANIUM: frozenset({"Jewels"}),
+}
+# Quiver/Shield/Focus all live in the "Offhands" bgroup in this project's data
+# model, but real bones split by slot more finely than that. Quiver -> Jawbone
+# (real Jawbones work on "a weapon or quiver") is directly confirmed by
+# several current PoE2 guides. Shield/Focus -> Rib is NOT directly confirmed
+# anywhere researched (no guide mentions off-hand items by name) -- it's an
+# inference from the compiled gamedata itself: every Offhands-bgroup base
+# (Focus, Shield x4, and Quiver) has real Desecrated tier data, and Quiver's
+# is already explained by Jawbone, so Shield/Focus having it too only makes
+# sense if some bone can reach them -- Rib ("armour") is the closest fit,
+# since Shields/Focus are conventionally "defensive gear" like Body
+# Armour/Helmet/Gloves/Boots even though this project's own bgroup taxonomy
+# keeps them separate. Flagged in docs/design_notes.md as an inference, not a
+# confirmed mechanic -- revisit if a source specifically documents it.
+_JAWBONE_EXTRA_BASE_NAMES = frozenset({"Quiver"})
+_RIB_EXTRA_BASE_NAMES = frozenset({"Focus"})
+_RIB_EXTRA_BASE_NAME_PREFIXES = ("Shield",)
+
+_BONE_FAMILY_NAME: dict[BoneFamily, str] = {
+    BoneFamily.JAWBONE: "Jawbone",
+    BoneFamily.RIB: "Rib",
+    BoneFamily.COLLARBONE: "Collarbone",
+    BoneFamily.CRANIUM: "Cranium",
+}
+_BONE_TIER_NAME_PREFIX: dict[BoneTier, str] = {BoneTier.GNAWED: "Gnawed", BoneTier.PRESERVED: "Preserved", BoneTier.ANCIENT: "Ancient"}
+_BONE_MAX_ITEM_ILVL: dict[BoneTier, int] = {BoneTier.GNAWED: 64}
+"""Gnawed bones can only desecrate an item at or below this ilvl -- confirmed
+against several current PoE2 guides (poe2db.tw doesn't document Desecration
+at all, 2026-08-19). Preserved/Ancient have no such cap (absent from this
+dict, so `DesecrationAction` treats them as unrestricted)."""
+_BONE_MIN_MOD_ILVL: dict[BoneTier, int] = {BoneTier.ANCIENT: 40}
+"""Ancient bones guarantee the revealed mod's own tier requires at least this
+ilvl -- the same `min_ilvl` shape as Greater/Perfect currency tiers
+(`MIN_ILVL_BY_TIER`), just for bones. Gnawed/Preserved have no such floor."""
+
+
+def _bone_family_matches(gamedata: GameData, base_id: BaseId, family: BoneFamily) -> bool:
+    base_name = gamedata.bases[base_id].name
+    if family is BoneFamily.JAWBONE and base_name in _JAWBONE_EXTRA_BASE_NAMES:
+        return True
+    if family is BoneFamily.RIB and (base_name in _RIB_EXTRA_BASE_NAMES or base_name.startswith(_RIB_EXTRA_BASE_NAME_PREFIXES)):
+        return True
+    return gamedata.base_group_of(base_id).name in _BONE_FAMILY_BGROUPS[family]
+
+
+class DesecrationAction:
+    """A Desecration bone: reveals 3 random Desecrated-category modifiers
+    (6 with Omen of Abyssal Echoes, which lets you reroll the presented
+    options once) and the player picks whichever one to actually apply --
+    the first action in this project where the outcome depends on a choice
+    among several random candidates rather than a single random draw. See
+    `solver.model_learning.estimate_transition`'s `reveal_candidates` branch
+    for how that choice is modeled (pick whichever candidate helps the
+    target most, matching a rational player).
+
+    If the item already has the maximum number of affixes, applying a bone
+    removes one random non-fractured affix first to make room -- confirmed
+    against several current PoE2 guides, same source as the rest of this
+    mechanic (poe2db.tw doesn't document Desecration at all, 2026-08-19)."""
+
+    kind = ActionKind.DESECRATION
+
+    def __init__(
+        self,
+        gamedata: GameData,
+        family: BoneFamily,
+        tier: BoneTier,
+        restrict: Affix | None = None,
+        echoes: bool = False,
+    ):
+        self._gd = gamedata
+        self.family = family
+        self.tier = tier
+        self.restrict = restrict
+        self.echoes = echoes
+        self.min_ilvl = _BONE_MIN_MOD_ILVL.get(tier, 0)
+        self.max_item_ilvl = _BONE_MAX_ITEM_ILVL.get(tier)
+        self._base_name = f"{_BONE_TIER_NAME_PREFIX[tier]} {_BONE_FAMILY_NAME[family]}"
+        self.name = _with_omen(self._base_name, self._omen_name())
+
+    def _omen_name(self) -> str | None:
+        if self.restrict is Affix.PREFIX:
+            return "Omen of Sinistral Necromancy"
+        if self.restrict is Affix.SUFFIX:
+            return "Omen of Dextral Necromancy"
+        if self.echoes:
+            return "Omen of Abyssal Echoes"
+        return None
+
+    def cost(self) -> float:
+        base = _price(self._gd, self._base_name, DEFAULT_COSTS[self.kind])
+        omen = self._omen_name()
+        return base + _price(self._gd, omen, FALLBACK_OMEN_COST) if omen else base
+
+    def _is_full(self, item: Item) -> bool:
+        bg = self._gd.base_group_of(item.base_id)
+        return item.prefix_count + item.suffix_count >= bg.max_prefix + bg.max_suffix
+
+    def applicable(self, item: Item) -> bool:
+        if item.rarity is not Rarity.RARE:
+            return False
+        if not _bone_family_matches(self._gd, item.base_id, self.family):
+            return False
+        if self.max_item_ilvl is not None and item.ilvl > self.max_item_ilvl:
+            return False
+        if self._is_full(item):
+            # Room will be made in reveal_candidates; whether that specific
+            # removal happens to open up a non-empty pool can't be known
+            # without knowing which affix gets removed, so this only checks
+            # that *something* removable exists -- reveal_candidates itself
+            # degrades to a safe no-op if the post-removal pool is still
+            # empty, the same "pool dried up" precedent AlchemyAction uses.
+            return any(not a.fractured for a in item.affixes)
+        return bool(build_desecrated_pool(self._gd, item, self.restrict, min_ilvl=self.min_ilvl))
+
+    def _make_room(self, item: Item, rng: random.Random) -> Item:
+        if not self._is_full(item):
+            return item
+        candidates = [a for a in item.affixes if not a.fractured]
+        if not candidates:
+            return item
+        return _remove_affix(item, rng.choice(candidates))
+
+    def reveal_candidates(self, item: Item, rng: random.Random) -> list[Item]:
+        item = self._make_room(item, rng)
+        pool = build_desecrated_pool(self._gd, item, self.restrict, min_ilvl=self.min_ilvl)
+        if not pool:
+            return [item]  # nothing eligible even after making room -- rare, but a real no-op rather than a crash
+        picks = weighted_sample_without_replacement(pool, 6 if self.echoes else 3, rng)
+        return [_add_affix(item, _rolled(self._gd, mod.id, tier, rng)) for mod, tier in picks]
+
+
+def desecration_actions_for(gamedata: GameData, base_id: BaseId) -> dict[str, object]:
+    """One DesecrationAction per (family, tier) whose slot family matches
+    this base, plus Sinistral/Dextral Necromancy and Abyssal Echoes wrapped
+    onto the Preserved tier (this project's existing convention of wrapping
+    omens onto one representative tier rather than cross-producing every
+    omen with every tier -- see e.g. `omen_wrapped_actions`'s Regal/Exalted
+    omens, all built at CurrencyTier.BASE only)."""
+    out: dict[str, object] = {}
+    for family in BoneFamily:
+        if not _bone_family_matches(gamedata, base_id, family):
+            continue
+        for tier in BoneTier:
+            out[f"desecration_{family.value}_{tier.value}"] = DesecrationAction(gamedata, family, tier)
+        out[f"desecration_{family.value}_omen_sinistral"] = DesecrationAction(
+            gamedata, family, BoneTier.PRESERVED, restrict=Affix.PREFIX
+        )
+        out[f"desecration_{family.value}_omen_dextral"] = DesecrationAction(
+            gamedata, family, BoneTier.PRESERVED, restrict=Affix.SUFFIX
+        )
+        out[f"desecration_{family.value}_omen_echoes"] = DesecrationAction(gamedata, family, BoneTier.PRESERVED, echoes=True)
     return out
 
 

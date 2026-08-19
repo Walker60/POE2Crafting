@@ -12,7 +12,7 @@ from dataclasses import dataclass
 
 from poe2craft.data.loader import GameData
 from poe2craft.domain.items import Item
-from poe2craft.solver.featurize import AbstractState, ResolvedTarget, abstractify
+from poe2craft.solver.featurize import AbstractState, ResolvedTarget, abstractify, pick_best_candidate
 
 
 @dataclass
@@ -48,7 +48,10 @@ def run_trajectory(
         if not action.applicable(item):
             break  # policy/engine disagreement on applicability -- stop rather than loop forever
         total_cost += action.cost()
-        item = action.outcome(item, rng)
+        if hasattr(action, "reveal_candidates"):
+            item = pick_best_candidate(target, state, action.reveal_candidates(item, rng), rng)
+        else:
+            item = action.outcome(item, rng)
     final_state = abstractify(target, item)
     success = final_state.is_goal()
     if success:

@@ -43,22 +43,17 @@ def build_pool(
     Homogenising Coronation/Exaltation. Only ~57% of rollable mods have any
     tag at all, so this can legitimately empty the pool; only ~half of *those*
     mods would ever satisfy an overlap even among tagged mods, since sharing
-    *a* tag isn't guaranteed just because both are tagged."""
-    eligible = gamedata.eligible_mods_for_base(item.base_id)
+    *a* tag isn't guaranteed just because both are tagged.
+
+    The affix/ilvl/tags filtering (everything except group-exclusion) is
+    cached on `gamedata` via `rollable_entries` -- see its docstring. Only the
+    group-exclusion filter below actually needs to run fresh every call, since
+    it's the only part that depends on this specific item's current mods."""
+    entries = gamedata.rollable_entries(item.base_id, affix, item.ilvl, min_ilvl, required_tags)
     occupied = item.occupied_group_keys()
-    pool: list[PoolEntry] = []
-    for mod_id, tiers in eligible.items():
-        mod = gamedata.mods[mod_id]
-        if mod.affix is not affix:
-            continue
-        if mod.group_keys & occupied:
-            continue
-        if required_tags is not None and not (mod.tags & required_tags):
-            continue
-        for tier in tiers:
-            if min_ilvl <= tier.ilvl <= item.ilvl and tier.weight > 0:
-                pool.append((mod, tier))
-    return pool
+    if not occupied:
+        return entries  # nothing to exclude -- safe to hand back the cached list as-is (no caller mutates it)
+    return [(mod, tier) for mod, tier in entries if not (mod.group_keys & occupied)]
 
 
 def has_room(gamedata: GameData, item: Item, affix: Affix) -> bool:
@@ -86,6 +81,27 @@ def build_combined_pool(
         pool.extend(build_pool(gamedata, item, Affix.PREFIX, min_ilvl=min_ilvl, required_tags=required_tags))
     if has_room(gamedata, item, Affix.SUFFIX):
         pool.extend(build_pool(gamedata, item, Affix.SUFFIX, min_ilvl=min_ilvl, required_tags=required_tags))
+    return pool
+
+
+def build_desecrated_pool(
+    gamedata: GameData, item: Item, affix: Affix | None = None, min_ilvl: int = 0
+) -> list[PoolEntry]:
+    """Like `build_pool`/`build_combined_pool`, but draws from the
+    `ModCategory.DESECRATED` pool (ground/corpse-reveal mods, never in the
+    general roll pool) instead of the NORMAL-only rollable one -- what a
+    Desecration bone action's "reveal 3 candidates" actually samples from.
+    `affix=None` returns both sides (each still gated by `has_room`,
+    matching `build_combined_pool`'s shape); pass a specific `Affix` to
+    restrict one side only (Omen of Sinistral/Dextral Necromancy)."""
+    sides = (affix,) if affix is not None else (Affix.PREFIX, Affix.SUFFIX)
+    occupied = item.occupied_group_keys()
+    pool: list[PoolEntry] = []
+    for side in sides:
+        if not has_room(gamedata, item, side):
+            continue
+        entries = gamedata.desecrated_entries(item.base_id, side, item.ilvl, min_ilvl)
+        pool.extend((mod, tier) for mod, tier in entries if not (mod.group_keys & occupied))
     return pool
 
 

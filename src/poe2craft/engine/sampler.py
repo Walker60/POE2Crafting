@@ -26,6 +26,22 @@ def weighted_pick(pool: list[PoolEntry], rng: random.Random) -> PoolEntry:
     return pool[-1]  # floating-point fallback, negligible probability
 
 
+def weighted_sample_without_replacement(pool: list[PoolEntry], k: int, rng: random.Random) -> list[PoolEntry]:
+    """`k` weighted draws from `pool` with no repeats -- what a Desecration
+    bone's "reveal 3 (or 6, with Omen of Abyssal Echoes) candidates" actually
+    does; a real reveal never shows the same (mod, tier) twice. Returns fewer
+    than `k` entries if the pool is smaller than `k` (draws everything once)
+    rather than raising -- an exhausted-pool edge case the caller (a small
+    base's Desecrated pool for one affix side) can hit legitimately."""
+    working = list(pool)
+    picks: list[PoolEntry] = []
+    for _ in range(min(k, len(working))):
+        pick = weighted_pick(working, rng)
+        picks.append(pick)
+        working.remove(pick)
+    return picks
+
+
 def roll_values(tier_value_ranges: tuple[tuple[float, float], ...], rng: random.Random) -> tuple[float, ...]:
     return tuple(rng.uniform(lo, hi) for lo, hi in tier_value_ranges)
 

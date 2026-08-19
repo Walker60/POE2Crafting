@@ -7,6 +7,7 @@ subsequent report."""
 from __future__ import annotations
 
 import random
+from concurrent.futures import ProcessPoolExecutor
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -15,6 +16,9 @@ from poe2craft.data.schemas import TargetModSpec, TargetSpec
 from poe2craft.domain.ids import BaseId, ModId
 from poe2craft.domain.items import Rarity
 from poe2craft.engine.omens import all_actions
+from poe2craft.pricing.errors import TradeAPIError, TradeConfigError
+from poe2craft.pricing.trade_client import TradeClient
+from poe2craft.pricing.valuation import estimate_buy_price, estimate_sell_value, recommend
 from poe2craft.solver.cost_stats import estimate_cost_spread
 from poe2craft.solver.featurize import (
     ItemReportError,
@@ -23,10 +27,11 @@ from poe2craft.solver.featurize import (
     abstractify,
     item_from_report,
     resolve_target,
+    start_state,
 )
 from poe2craft.solver.model_learning import build_mdp
 from poe2craft.solver.value_iteration import value_iteration
-from poe2craft.web.deps import get_gamedata, get_session_store
+from poe2craft.web.deps import get_executor, get_gamedata, get_session_store, get_trade_client, get_trade_stat_mapping
 from poe2craft.web.schemas import (
     AdvanceRequest,
     CostSpreadResponse,
@@ -34,6 +39,7 @@ from poe2craft.web.schemas import (
     SetupRequest,
     SolveResponse,
     TargetProgressItem,
+    TradeComparisonResponse,
 )
 from poe2craft.web.session import Session, SessionStore
 
@@ -102,6 +108,7 @@ def create_session(
     req: SetupRequest,
     gamedata: GameData = Depends(get_gamedata),
     store: SessionStore = Depends(get_session_store),
+    executor: ProcessPoolExecutor | None = Depends(get_executor),
 ) -> SolveResponse:
     base_id = BaseId(req.base_id)
     base = gamedata.bases.get(base_id)
@@ -131,7 +138,7 @@ def create_session(
     state0 = abstractify(target, item)
     actions = all_actions(gamedata, base_id=target.base_id)
     rng = random.Random(req.seed) if req.seed is not None else random.Random()
-    mdp = build_mdp(gamedata, target, state0, actions, rng, n_trials=req.n_trials)
+    mdp = build_mdp(gamedata, target, state0, actions, rng, n_trials=req.n_trials, executor=executor, base_id=target.base_id)
     result = value_iteration(mdp, actions, objective=target.objective)
 
     session = store.create(
@@ -152,6 +159,7 @@ def advance_session(
     req: AdvanceRequest,
     gamedata: GameData = Depends(get_gamedata),
     store: SessionStore = Depends(get_session_store),
+    executor: ProcessPoolExecutor | None = Depends(get_executor),
 ) -> SolveResponse:
     session = store.get(session_id)
     if session is None:
@@ -176,7 +184,16 @@ def advance_session(
     # project doesn't model). Re-solve fresh from here rather than erroring --
     # and mutate the session in place so the enlarged reachable set benefits
     # every later advance in this session too, not just this one call.
-    mdp = build_mdp(gamedata, session.target, new_state, session.actions, session.rng, n_trials=session.n_trials)
+    mdp = build_mdp(
+        gamedata,
+        session.target,
+        new_state,
+        session.actions,
+        session.rng,
+        n_trials=session.n_trials,
+        executor=executor,
+        base_id=session.target.base_id,
+    )
     session.result = value_iteration(mdp, session.actions, objective=session.target.objective)
     session.current_state = new_state
     session.current_item = item
@@ -232,4 +249,60 @@ def cost_spread(
         median_cost=spread.median,
         p90_cost=spread.p90,
         worst_cost=spread.worst,
+    )
+
+
+@router.post("/{session_id}/trade-compare", response_model=TradeComparisonResponse)
+def trade_compare(
+    session_id: str,
+    gamedata: GameData = Depends(get_gamedata),
+    store: SessionStore = Depends(get_session_store),
+    trade_client: TradeClient = Depends(get_trade_client),
+    mod_mapping: dict = Depends(get_trade_stat_mapping),
+) -> TradeComparisonResponse:
+    """Live pathofexile.com/trade2 lookup comparing three options in real
+    Divine-Orb terms: keep crafting, buy the target outright, or sell the
+    current item and start over. Only ever called when the user explicitly
+    asks for it -- never from create_session/advance_session, never polled.
+    See docs/data_provenance.md."""
+    session = store.get(session_id)
+    if session is None:
+        raise HTTPException(404, f"unknown or expired session {session_id!r}")
+    if session.target.objective != "cost":
+        raise HTTPException(422, "trade-compare needs a cost-objective session, so every number is in Divine Orb terms")
+
+    try:
+        league = trade_client.league
+        buy = estimate_buy_price(trade_client, gamedata, mod_mapping, session.target)
+        sell = estimate_sell_value(trade_client, gamedata, mod_mapping, session.current_item)
+    except (TradeAPIError, TradeConfigError) as e:
+        raise HTTPException(502, f"pathofexile.com/trade2 lookup failed: {e}") from e
+
+    craft_cost = -session.result.expected_value(session.current_state)
+
+    # "Sell and restart"'s other leg: cost to craft the same target again
+    # from an empty item -- reuses advance_session's own "cached policy vs.
+    # resolve fresh" fallback shape, since the empty state is very likely
+    # already in this session's reachable set from the original BFS.
+    fresh_state = start_state(gamedata, session.target, Rarity.NORMAL, frozenset())
+    if fresh_state in session.result.value:
+        fresh_craft_cost = -session.result.expected_value(fresh_state)
+    else:
+        fresh_mdp = build_mdp(gamedata, session.target, fresh_state, session.actions, session.rng, n_trials=session.n_trials)
+        fresh_result = value_iteration(fresh_mdp, session.actions, objective=session.target.objective)
+        fresh_craft_cost = -fresh_result.expected_value(fresh_state)
+
+    restart_net_cost = fresh_craft_cost - sell.divine_price if sell.divine_price is not None else None
+    recommendation = recommend(craft_cost, buy.divine_price, restart_net_cost)
+
+    return TradeComparisonResponse(
+        league=league,
+        craft_cost=craft_cost,
+        buy_price=buy.divine_price,
+        buy_price_n_listings=buy.n_listings,
+        sell_value=sell.divine_price,
+        sell_value_n_listings=sell.n_listings,
+        sell_and_restart_net_cost=restart_net_cost,
+        recommendation=recommendation,
+        caveats=list(buy.caveats) + list(sell.caveats),
     )

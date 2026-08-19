@@ -43,7 +43,7 @@ def test_regal_coronation_omen_restricts_added_affix(gamedata):
     result = action.outcome(item, random.Random(0))
     assert result.rarity is Rarity.RARE
     assert result.suffix_count == 1 and result.prefix_count == 0
-    assert "Regal Orb (Omen: suffixes only)" == action.name
+    assert "Regal Orb (Omen of Dextral Coronation)" == action.name
 
 
 def test_greater_exaltation_adds_two_modifiers(gamedata):
@@ -129,3 +129,36 @@ def test_whittling_breaks_ties_randomly_not_by_insertion_order(gamedata):
         if tied_b not in result.prefixes:
             removed.add("b")
     assert removed == {"a", "b"}  # both sides of the tie get removed across enough trials
+
+
+def test_omen_of_light_only_removes_desecrated_modifiers():
+    # Bespoke gamedata (not the shared fixture, which has no DESECRATED-
+    # category mod) with one Desecrated prefix and one Normal prefix present
+    # on the same item.
+    from poe2craft.data.loader import GameData
+    from poe2craft.domain.ids import BaseGroupId, BaseId
+    from poe2craft.domain.items import BaseGroup, BaseItemDef
+    from poe2craft.domain.mods import ModCategory, ModDef
+
+    base_id = BaseId("b1")
+    bgroup_id = BaseGroupId("bg1")
+    normal_mod = ModDef(id=ModId("n1"), name="Normal", affix=Affix.PREFIX, category=ModCategory.NORMAL, group_keys=frozenset({"gn"}))
+    desecrated_mod = ModDef(id=ModId("d1"), name="Desecrated", affix=Affix.PREFIX, category=ModCategory.DESECRATED, group_keys=frozenset({"gd"}))
+    gamedata = GameData(
+        base_groups={bgroup_id: BaseGroup(id=bgroup_id, name="Test", max_affix=6, max_sockets=0)},
+        bases={base_id: BaseItemDef(id=base_id, name="Test Base", bgroup_id=bgroup_id, is_jewellery=False)},
+        mods={ModId("n1"): normal_mod, ModId("d1"): desecrated_mod},
+        tiers_by_base={},
+        all_tiers_by_base={},
+    )
+
+    normal_affix = RolledAffix(mod_id=ModId("n1"), affix=Affix.PREFIX, group_keys=frozenset({"gn"}), value_ranges=(), values=())
+    desecrated_affix = RolledAffix(mod_id=ModId("d1"), affix=Affix.PREFIX, group_keys=frozenset({"gd"}), value_ranges=(), values=())
+    item = Item(base_id=base_id, ilvl=1, rarity=Rarity.RARE, prefixes=(normal_affix, desecrated_affix))
+
+    action = AnnulmentAction(gamedata, restrict_category=ModCategory.DESECRATED)
+    assert action.name == "Orb of Annulment (Omen of Light)"
+    for seed in range(20):
+        result = action.outcome(item, random.Random(seed))
+        assert normal_affix in result.prefixes  # untouched -- not Desecrated
+        assert desecrated_affix not in result.prefixes  # the only removable candidate

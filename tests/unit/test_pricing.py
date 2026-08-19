@@ -42,6 +42,22 @@ def test_parse_economy_divine_ignores_the_header_row():
     assert "24h Value" not in prices
 
 
+# Items pricier than 1 Divine Orb are shown the other way around on the real
+# page: "1 <name> <-> <qty_divine> Divine Orb" -- an earlier version of the
+# parser required the divine-side quantity to be exactly "1" and silently
+# dropped rows like this one (caught while pricing Desecration's bones).
+_EXPENSIVE_ROW_HTML = """
+<table><tbody>
+<tr><td>1</td><td><a>Ancient Collarbone</a></td><td>4.76</td><td><a>Divine Orb</a></td><td>120</td></tr>
+</tbody></table>
+"""
+
+
+def test_parse_economy_divine_handles_items_pricier_than_one_divine():
+    prices = parse_economy_divine(_EXPENSIVE_ROW_HTML)
+    assert abs(prices["Ancient Collarbone"] - 4.76) < 1e-9
+
+
 BASE_ID = BaseId("b1")
 
 

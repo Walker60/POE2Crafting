@@ -14,11 +14,16 @@ export function Collapsible({ title, defaultOpen = false, onOpen, children }: Pr
   const [open, setOpen] = useState(defaultOpen);
 
   function toggle() {
-    setOpen((wasOpen) => {
-      const next = !wasOpen;
-      if (next) onOpen?.();
-      return next;
-    });
+    // Deliberately not the `setOpen(prev => ...)` functional-updater form --
+    // React may invoke that updater outside a normal event-handler context
+    // (e.g. StrictMode's double-invoke), and calling another component's
+    // state setter (via onOpen) from inside it is exactly what produced a
+    // real "Cannot update a component while rendering a different component"
+    // warning. Reading `open` from the closure and calling onOpen here, as a
+    // plain statement in the click handler, keeps the state update pure.
+    const next = !open;
+    setOpen(next);
+    if (next) onOpen?.();
   }
 
   return (

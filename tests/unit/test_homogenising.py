@@ -92,4 +92,4 @@ def test_exalted_homogenising_only_adds_a_same_tag_mod(tagged_gamedata):
     result = action.outcome(item, random.Random(0))
     new_mod_ids = {a.mod_id for a in result.affixes} - {ModId("existing_fire")}
     assert new_mod_ids == {ModId("candidate_fire")}
-    assert "same type as existing" in action.name
+    assert "Omen of Homogenising Exaltation" in action.name

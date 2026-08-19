@@ -54,22 +54,29 @@ max_steps: 30
 - **Data layer**: Craft of Exile's full PoE2 mod/tier/base dataset, parsed and
   validated into `data/compiled/poe2_gamedata.json` (`poe2craft.data`).
 - **Engine**: the core currency loop -- Transmutation, Augmentation, Alchemy,
-  Regal, Divine, Annulment, Chaos, Exalted, Fracturing -- as action wrappers
+  Regal, Divine, Annulment, Chaos, Exalted, Fracturing -- plus **Desecration**
+  (bones: reveal 3 random Desecrated modifiers, pick 1 -- the first action
+  where the outcome is a *choice* among candidates rather than a single
+  random draw, see `docs/design_notes.md`) -- as action wrappers
   (`poe2craft.engine`). Weighted mod sampling respects group exclusion, ilvl
   gating, and rarity-based prefix/suffix caps.
-- **17 omens**, confirmed against poe2db.tw's omen catalog: Sinistral/Dextral
-  Annulment, Exaltation, Alchemy, Coronation (Regal), and Erasure (Chaos);
+- **21 omens**, confirmed against poe2db.tw's omen catalog except the
+  Desecration-related ones (poe2db doesn't document Desecration at all --
+  confirmed against several current PoE2 guides instead, see
+  `docs/design_notes.md`): Sinistral/Dextral Annulment, Exaltation, Alchemy,
+  Coronation (Regal), Erasure (Chaos), and Necromancy (Desecration reveal);
   Greater Annulment/Exaltation (removes/adds 2 instead of 1); Whittling
   (Chaos removes the *lowest-level* modifier, deterministically);
   Sinistral/Dextral Crystallisation (restricts a Perfect Essence's removal
-  step); and Homogenising Coronation/Exaltation (restricts the add to a mod
+  step); Homogenising Coronation/Exaltation (restricts the add to a mod
   sharing a broad category tag -- fire/caster/life/etc. -- with an existing
-  modifier, using mod-tag data pulled from CoE's `mtypes` field specifically
-  for this). The solver genuinely uses these -- e.g. solving for a single
-  suffix mod on an Amulet drops from ~12.6 to ~7.9 expected steps once Dextral
-  Alchemy (max suffixes) is in the action set. 6 more omens are deferred
-  (Catalyst quality and Desecrated support this project doesn't have -- see
-  `docs/design_notes.md`).
+  modifier); Abyssal Echoes (rerolls a Desecration reveal once); and Light
+  (Annulment removes only a Desecrated modifier). The solver genuinely uses
+  these -- e.g. solving for a single suffix mod on an Amulet drops from
+  ~12.6 to ~7.9 expected steps once Dextral Alchemy (max suffixes) is in the
+  action set. 8 more omens are deferred (Catalyst quality, 4 Waystone-
+  specific ones, and 3 restricted to "Lich" modifiers with no confirmed tag
+  data -- see `docs/design_notes.md`).
 - **Greater/Perfect tiers** of Transmutation, Augmentation, Regal, Chaos, and
   Exalted: each restricts its roll to mods whose tier requires at least a
   minimum modifier level, confirmed directly from poe2db.tw's item pages
@@ -89,10 +96,15 @@ max_steps: 30
   output is therefore a real Divine-Orb-equivalent estimate, not an arbitrary
   unit -- e.g. a real solve for 2 Body Armour mods came back at "0.47" (Divine
   Orbs). A handful of names not currently traded on that page (Fracturing
-  Orb, ~12 of the 17 omens, ~53 of 95 essences) fall back to a documented
-  placeholder (`engine.apply.DEFAULT_COSTS`/`FALLBACK_OMEN_COST`/
-  `FALLBACK_ESSENCE_COST`), calibrated from the real prices actually observed
-  rather than an arbitrary guess.
+  Orb, Gnawed/Ancient Cranium, 7 of the 21 omens, ~53 of 95 essences) fall
+  back to a documented placeholder (`engine.apply.DEFAULT_COSTS`/
+  `FALLBACK_OMEN_COST`/`FALLBACK_ESSENCE_COST`), calibrated from the real
+  prices actually observed rather than an arbitrary guess. All 12 Desecration
+  bones and every Desecration-related omen are real, live-priced quotes, not
+  guesses -- fixing a real parser bug along the way (it silently dropped any
+  item priced *above* 1 Divine Orb, e.g. "1 Ancient Collarbone <-> 4.76
+  Divine Orb", since it only recognized the inverse "cheap item <-> 1 Divine
+  Orb" row shape).
 - **Essences**, all 95 of them: non-Perfect tiers (Lesser/Normal/Greater, plus
   ~11 uniquely-named essences) guarantee a normal-pool mod on a Magic->Rare
   transition, like a targeted Regal Orb; Perfect essences remove one existing
@@ -111,16 +123,29 @@ max_steps: 30
   reason about (and recommend actions toward) re-rolling a mod that showed up
   too weak, not just whether it showed up at all (see
   `examples/sword_tiered_target.yaml`).
-- **CLI**: `solve` / `simulate` / `explain` (`poe2craft.cli`).
+- **Live trade pricing** (`poe2craft.pricing`, optional -- see "Live trade
+  pricing" below and `docs/data_provenance.md`): queries
+  pathofexile.com/trade2 on demand to answer two things the solver's own
+  currency-based cost estimate can't: what real market premium a modifier
+  carries (`poe2craft mod-price`), and -- mid-craft -- whether it's cheaper
+  to keep crafting, buy the target outright, or sell the current item and
+  start over (`poe2craft trade-compare`, or the web UI's "Compare vs.
+  market" button). Deliberately never automatic: fires only on that
+  explicit CLI command or button click, never on session creation,
+  `advance`, or any polling.
+- **CLI**: `solve` / `simulate` / `explain` / `mod-price` / `trade-compare`
+  (`poe2craft.cli`).
 
 ## What's not implemented yet
 
 - **poe2db scraping** (the omen catalog and currency mechanic text) is stubbed
   in `poe2craft.data.poe2db_parse` -- `scripts/fetch_poe2db_pages.py` and
   `scripts/build_gamedata.py` are wired up to consume it once written.
-- Recombinators, Vaal/corruption, Runes/Soul Cores, quality/Catalysts, and
-  Desecrated mods are deliberately out of scope for the solver -- see
-  `docs/design_notes.md`.
+- Recombinators, Vaal/corruption, Runes/Soul Cores, and quality/Catalysts are
+  deliberately out of scope for the solver -- see `docs/design_notes.md`.
+  Desecrated mods *are* now in scope (bones); Altered Collarbone (a rare
+  Genesis-Tree-only bone variant) and the 3 omens restricted to "Lich"
+  modifiers remain deferred within that mechanic specifically.
 
 ## Tests
 
@@ -148,4 +173,35 @@ patch, or whenever you want current currency prices (see the "Real currency
 costs" note above -- these drift). Still a manual, user-invoked action, never
 automatic. See `docs/data_provenance.md` for sources, the scraping/
 redistribution stance, and how to refresh just one source instead.
+
+## Live trade pricing (optional)
+
+`poe2craft mod-price`/`trade-compare` and the web UI's "Compare vs. market"
+button query pathofexile.com/trade2 for real listing prices -- **not** part
+of the offline currency-cost pipeline above, and **never fired
+automatically** (see `docs/data_provenance.md` for why these particular
+endpoints are a knowingly-accepted ToS conflict, not a routine data source,
+and what's done to keep that contained).
+
+One-time setup:
+
+```
+uv run python scripts/fetch_trade_stats.py
+uv run python scripts/build_trade_stat_mapping.py
+```
+
+Then, per shell session, set the league to query (never guessed
+automatically) and optionally your account's session cookie (works logged
+out too, just rate-limited harder -- see `docs/data_provenance.md` for
+exactly how this credential is and isn't handled):
+
+```
+export POE2CRAFT_TRADE_LEAGUE="Standard"     # the exact trade-site league name
+export POE2CRAFT_POESESSID="..."             # optional
+uv run poe2craft mod-price 5049 --base Amulet
+uv run poe2craft trade-compare examples/amulet_life_regen.yaml
+```
+
+The web UI reads the same two environment variables from whatever process
+`poe2craft serve` runs in.
 # POE2Crafting

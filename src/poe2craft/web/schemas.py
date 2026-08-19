@@ -129,3 +129,25 @@ class CostSpreadResponse(BaseModel):
     p90_cost: float
     worst_cost: float
     unit: str = "currency (Divine Orb)"
+
+
+class TradeComparisonResponse(BaseModel):
+    """Buy-vs-craft-vs-sell, in real Divine-Orb terms -- only ever returned
+    from an explicit POST the user triggers (see web/crafting.py's
+    trade_compare route and docs/data_provenance.md). Deliberately has no
+    credential field anywhere on this or any other request/response model --
+    POE2CRAFT_POESESSID is a server-side-only secret, never round-tripped
+    through the API."""
+
+    league: str
+    craft_cost: float
+    buy_price: float | None
+    buy_price_n_listings: int
+    sell_value: float | None
+    sell_value_n_listings: int
+    sell_and_restart_net_cost: float | None
+    """fresh_craft_cost - sell_value -- negative means selling now and
+    starting over would be a net *profit*, not just cheaper."""
+    recommendation: str  # "keep_crafting" | "buy" | "sell_and_restart" | "insufficient_data"
+    caveats: list[str]
+    unit: str = "currency (Divine Orb)"
