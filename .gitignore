@@ -9,3 +9,6 @@ out/
 # cookie) -- see pricing.config.DEFAULT_SETTINGS_PATH and
 # docs/data_provenance.md. Must never be committed.
 data/local/
+# make start/stop's PID files and dev-server logs (scripts/dev.ps1).
+.make-pids/
+.make-logs/

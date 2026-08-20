@@ -18,6 +18,12 @@ for the full design rationale, scope decisions, and known limitations, and
 uv sync
 ```
 
+Or, for the web GUI (backend + frontend dev server together): `make install`
+sets up both, `make start`/`make stop`/`make status` run them in the
+background, and `make refresh-data` re-scrapes the vendored game data --
+run `make` (no target) for the full list. See `Makefile`/`scripts/dev.ps1`
+if you want to know exactly what each does.
+
 ## Usage
 
 ```
