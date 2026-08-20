@@ -5,6 +5,7 @@ directly, so it isolates the branch itself from any real reveal mechanics)."""
 import random
 
 from poe2craft.data.schemas import TargetModSpec, TargetSpec
+from poe2craft.domain.actions import ActionKind
 from poe2craft.domain.ids import ModId
 from poe2craft.domain.items import Item, Rarity, RolledAffix
 from poe2craft.domain.mods import Affix
@@ -84,3 +85,67 @@ def test_estimate_transition_breaks_ties_randomly_when_nothing_helps(gamedata):
     # states across 200 trials, not silently always favor one.
     assert len(dist) == 2
     assert not any(s.is_goal() for s in dist)
+
+
+class _FakeDeterministicAction:
+    """Always applicable; `outcome` returns the item unchanged, so it
+    always abstractifies to the same state -- stands in for the *shape* of
+    Divine/Fracture/non-Perfect-Essence's real behavior (identical outcome
+    on every applicable trial) without needing their real mechanics. Counts
+    calls so tests can prove the early exit actually fires, not just that
+    the answer comes out right."""
+
+    def __init__(self, kind):
+        self.kind = kind
+        self.outcome_calls = 0
+
+    def applicable(self, item):
+        return True
+
+    def outcome(self, item, rng):
+        self.outcome_calls += 1
+        return item
+
+
+def test_estimate_transition_stops_after_one_hit_for_abstraction_deterministic_kinds(gamedata):
+    spec = TargetSpec(base="Test Base", ilvl=80, target_mods=[TargetModSpec(mod_id="p3")])
+    target = resolve_target(gamedata, spec)
+    state = start_state(gamedata, target, Rarity.NORMAL, frozenset())
+
+    for kind in (ActionKind.DIVINE, ActionKind.FRACTURE, ActionKind.ESSENCE):
+        action = _FakeDeterministicAction(kind)
+        dist = estimate_transition(gamedata, target, state, action, random.Random(0), n_trials=500)
+        assert action.outcome_calls == 1, f"{kind} should stop after the first applicable trial, not run all 500"
+        assert dist == {state: 1.0}
+
+
+def test_estimate_transition_does_not_early_exit_for_other_kinds(gamedata):
+    # Same always-applicable, always-identical-outcome shape as above, but
+    # PERFECT_ESSENCE is deliberately excluded from the deterministic set
+    # (its removal step is genuinely random) -- confirms it isn't swept in
+    # by accident, and that non-deterministic kinds still spend the full
+    # trial budget as before this optimization.
+    spec = TargetSpec(base="Test Base", ilvl=80, target_mods=[TargetModSpec(mod_id="p3")])
+    target = resolve_target(gamedata, spec)
+    state = start_state(gamedata, target, Rarity.NORMAL, frozenset())
+
+    action = _FakeDeterministicAction(ActionKind.PERFECT_ESSENCE)
+    estimate_transition(gamedata, target, state, action, random.Random(0), n_trials=50)
+    assert action.outcome_calls == 50
+
+
+def test_estimate_transition_early_exit_matches_the_real_divine_action(gamedata):
+    """Sanity check against real production code, not just the synthetic
+    fake above: a real DivineAction (self-loop by construction, see
+    engine.apply.DivineAction) gets the identical `{state: 1.0}` answer
+    whether estimate_transition runs 5 trials or 500."""
+    from poe2craft.engine.apply import DivineAction
+
+    spec = TargetSpec(base="Test Base", ilvl=80, target_mods=[TargetModSpec(mod_id="p3")])
+    target = resolve_target(gamedata, spec)
+    state = start_state(gamedata, target, Rarity.RARE, frozenset({ModId("p3")}))
+    action = DivineAction(gamedata)
+
+    small = estimate_transition(gamedata, target, state, action, random.Random(1), n_trials=5)
+    large = estimate_transition(gamedata, target, state, action, random.Random(2), n_trials=500)
+    assert small == large == {state: 1.0}

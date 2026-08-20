@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from poe2craft.data.loader import GameData
+from poe2craft.domain.actions import ActionKind
 from poe2craft.domain.ids import BaseId
 from poe2craft.solver.featurize import AbstractState, ResolvedTarget, abstractify, concretize, pick_best_candidate
 
@@ -55,6 +56,22 @@ bounded amount of estimator accuracy in an already-approximate Monte Carlo
 model for a large cut in wasted work on the (typically far more common)
 actions that are structurally inapplicable in a given state."""
 
+_ABSTRACTION_DETERMINISTIC_KINDS = frozenset({ActionKind.DIVINE, ActionKind.FRACTURE, ActionKind.ESSENCE})
+"""Action kinds whose outcome, once applicable at all, is *always* the same
+`AbstractState` -- not an approximation, a proof: `AbstractState`
+(`solver.featurize`) never tracks which specific mods are present or any
+`fractured` flag, and none of these three ever change mod identity/tier/
+counts/rarity (Divine only rerolls numeric values; Fracture only flips a
+`fractured` flag `abstractify` never reads; a non-Perfect essence's grants
+are a fixed list at fixed tiers -- `ActionKind.ESSENCE`, not
+`PERFECT_ESSENCE`, which *does* have a genuinely random removal step and is
+deliberately excluded here). So `estimate_transition` below stops sampling
+one of these the instant it's confirmed applicable once: every further
+applicable trial would just re-derive the identical single outcome, making
+`{result: attempted/attempted} == {result: 1.0}` regardless of `attempted`
+-- the early exit changes how many trials it takes to get that answer, never
+the answer itself. See docs/design_notes.md for the measured effect."""
+
 
 def estimate_transition(
     gamedata: GameData,
@@ -67,6 +84,7 @@ def estimate_transition(
     counts: Counter[AbstractState] = Counter()
     attempted = 0
     pilot = min(n_trials, _INAPPLICABLE_PILOT)
+    deterministic = getattr(action, "kind", None) in _ABSTRACTION_DETERMINISTIC_KINDS
     for i in range(n_trials):
         item = concretize(gamedata, target, state, rng)
         if action.applicable(item):
@@ -76,6 +94,8 @@ def estimate_transition(
             else:
                 result = action.outcome(item, rng)
             counts[abstractify(target, result)] += 1
+            if deterministic:
+                break
         elif i + 1 == pilot and attempted == 0 and pilot < n_trials:
             return {}
     if attempted == 0:
