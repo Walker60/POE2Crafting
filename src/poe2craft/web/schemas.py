@@ -218,3 +218,18 @@ class PoolPreviewResponse(BaseModel):
     essence's use is guaranteed to grant (probability 1 each) -- usually one
     entry, occasionally 2-3 for a hybrid essence."""
     unavailable_reason: str | None
+
+
+class InProgressSolveInfo(BaseModel):
+    kind: str  # "create_session" | "advance_session" | "trade_compare_restart"
+    base_name: str
+    objective: str
+    n_trials: int
+    running_for_seconds: float
+
+
+class SolveStatusResponse(BaseModel):
+    in_progress: list[InProgressSolveInfo]
+    """Empty when nothing is currently solving. `build_mdp`'s lazy BFS has
+    no notion of "percent done" to report -- this is deliberately just
+    "is one running, and for how long," not a progress bar."""

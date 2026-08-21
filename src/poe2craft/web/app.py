@@ -15,8 +15,9 @@ from fastapi.staticfiles import StaticFiles
 from poe2craft.data.loader import GameData, load_gamedata
 from poe2craft.pricing.settings_store import TradeSettingsStore
 from poe2craft.solver.parallel import health_check, make_executor
-from poe2craft.web import catalog, crafting, trade_settings
+from poe2craft.web import catalog, crafting, solve_status, trade_settings
 from poe2craft.web.session import SessionStore
+from poe2craft.web.solve_status import SolveStatusTracker
 
 FRONTEND_DIST = Path(__file__).resolve().parents[3] / "frontend" / "dist"
 
@@ -74,6 +75,7 @@ def create_app(
     # -- tests pass an isolated tmp_path so they never read/write the real
     # local settings file.
     app.state.trade_settings = TradeSettingsStore(trade_settings_path)
+    app.state.solve_status = SolveStatusTracker()
 
     if n_pool_workers is None:
         n_pool_workers = int(os.environ.get("POE2CRAFT_POOL_WORKERS", "0"))
@@ -89,6 +91,7 @@ def create_app(
     app.include_router(catalog.router)
     app.include_router(crafting.router)
     app.include_router(trade_settings.router)
+    app.include_router(solve_status.router)
 
     # Built frontend (`npm run build` under frontend/) is optional -- absent
     # during backend-only development, present for normal local use so

@@ -31,7 +31,14 @@ from poe2craft.solver.featurize import (
 )
 from poe2craft.solver.model_learning import build_mdp
 from poe2craft.solver.value_iteration import q_values_at, value_iteration
-from poe2craft.web.deps import get_executor, get_gamedata, get_session_store, get_trade_client, get_trade_stat_mapping
+from poe2craft.web.deps import (
+    get_executor,
+    get_gamedata,
+    get_session_store,
+    get_solve_status_tracker,
+    get_trade_client,
+    get_trade_stat_mapping,
+)
 from poe2craft.web.schemas import (
     AdvanceRequest,
     AlternativeAction,
@@ -46,6 +53,7 @@ from poe2craft.web.schemas import (
     TradeComparisonResponse,
 )
 from poe2craft.web.session import Session, SessionStore
+from poe2craft.web.solve_status import SolveStatusTracker
 
 router = APIRouter(prefix="/api/sessions", tags=["crafting"])
 
@@ -116,6 +124,7 @@ def create_session(
     gamedata: GameData = Depends(get_gamedata),
     store: SessionStore = Depends(get_session_store),
     executor: ProcessPoolExecutor | None = Depends(get_executor),
+    solve_status: SolveStatusTracker = Depends(get_solve_status_tracker),
 ) -> SolveResponse:
     base_id = BaseId(req.base_id)
     base = gamedata.bases.get(base_id)
@@ -145,8 +154,12 @@ def create_session(
     state0 = abstractify(target, item)
     actions = all_actions(gamedata, base_id=target.base_id)
     rng = random.Random(req.seed) if req.seed is not None else random.Random()
-    mdp = build_mdp(gamedata, target, state0, actions, rng, n_trials=req.n_trials, executor=executor, base_id=target.base_id)
-    result = value_iteration(mdp, actions, objective=target.objective)
+    token = solve_status.start("create_session", base.name, target.objective, req.n_trials)
+    try:
+        mdp = build_mdp(gamedata, target, state0, actions, rng, n_trials=req.n_trials, executor=executor, base_id=target.base_id)
+        result = value_iteration(mdp, actions, objective=target.objective)
+    finally:
+        solve_status.finish(token)
 
     session = store.create(
         target=target,
@@ -168,6 +181,7 @@ def advance_session(
     gamedata: GameData = Depends(get_gamedata),
     store: SessionStore = Depends(get_session_store),
     executor: ProcessPoolExecutor | None = Depends(get_executor),
+    solve_status: SolveStatusTracker = Depends(get_solve_status_tracker),
 ) -> SolveResponse:
     session = store.get(session_id)
     if session is None:
@@ -193,17 +207,21 @@ def advance_session(
     # project doesn't model). Re-solve fresh from here rather than erroring --
     # and mutate the session in place so the enlarged reachable set benefits
     # every later advance in this session too, not just this one call.
-    mdp = build_mdp(
-        gamedata,
-        session.target,
-        new_state,
-        session.actions,
-        session.rng,
-        n_trials=session.n_trials,
-        executor=executor,
-        base_id=session.target.base_id,
-    )
-    session.result = value_iteration(mdp, session.actions, objective=session.target.objective)
+    token = solve_status.start("advance_session", gamedata.bases[session.target.base_id].name, session.target.objective, session.n_trials)
+    try:
+        mdp = build_mdp(
+            gamedata,
+            session.target,
+            new_state,
+            session.actions,
+            session.rng,
+            n_trials=session.n_trials,
+            executor=executor,
+            base_id=session.target.base_id,
+        )
+        session.result = value_iteration(mdp, session.actions, objective=session.target.objective)
+    finally:
+        solve_status.finish(token)
     session.mdp = mdp  # alternatives/preview must reflect the newly-enlarged reachable set, not the stale original one
     session.push_history()
     session.current_state = new_state
@@ -270,6 +288,7 @@ def trade_compare(
     store: SessionStore = Depends(get_session_store),
     trade_client: TradeClient = Depends(get_trade_client),
     mod_mapping: dict = Depends(get_trade_stat_mapping),
+    solve_status: SolveStatusTracker = Depends(get_solve_status_tracker),
 ) -> TradeComparisonResponse:
     """Live pathofexile.com/trade2 lookup comparing three options in real
     Divine-Orb terms: keep crafting, buy the target outright, or sell the
@@ -299,8 +318,14 @@ def trade_compare(
     if fresh_state in session.result.value:
         fresh_craft_cost = -session.result.expected_value(fresh_state)
     else:
-        fresh_mdp = build_mdp(gamedata, session.target, fresh_state, session.actions, session.rng, n_trials=session.n_trials)
-        fresh_result = value_iteration(fresh_mdp, session.actions, objective=session.target.objective)
+        token = solve_status.start(
+            "trade_compare_restart", gamedata.bases[session.target.base_id].name, session.target.objective, session.n_trials
+        )
+        try:
+            fresh_mdp = build_mdp(gamedata, session.target, fresh_state, session.actions, session.rng, n_trials=session.n_trials)
+            fresh_result = value_iteration(fresh_mdp, session.actions, objective=session.target.objective)
+        finally:
+            solve_status.finish(token)
         fresh_craft_cost = -fresh_result.expected_value(fresh_state)
 
     restart_net_cost = fresh_craft_cost - sell.divine_price if sell.divine_price is not None else None

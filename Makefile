@@ -5,7 +5,7 @@
 #
 # Usage: make <target>   e.g. `make install`, `make start`, `make stop`
 
-.PHONY: help install refresh-data refresh-trade-stats start stop restart status test
+.PHONY: help install refresh-data refresh-trade-stats start stop restart status solve-status test
 
 help:
 	@echo "poe2craft dev tasks:"
@@ -16,6 +16,7 @@ help:
 	@echo "  make stop               stop both"
 	@echo "  make restart            stop then start"
 	@echo "  make status             show what's listening on :8000/:5173"
+	@echo "  make solve-status       is a solve currently running on the backend, and for how long"
 	@echo "  make test               run the backend test suite"
 
 install:
@@ -39,6 +40,9 @@ restart: stop start
 
 status:
 	@powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/dev.ps1 -Action status
+
+solve-status:
+	@uv run python scripts/solve_status.py
 
 test:
 	uv run pytest

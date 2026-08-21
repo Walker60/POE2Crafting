@@ -3,6 +3,7 @@ in `web.app.create_app` (GameData is loaded once, not per request)."""
 from __future__ import annotations
 
 from concurrent.futures import ProcessPoolExecutor
+from typing import TYPE_CHECKING
 
 from fastapi import Request
 
@@ -11,6 +12,11 @@ from poe2craft.pricing.settings_store import TradeSettingsStore
 from poe2craft.pricing.trade_client import TradeClient
 from poe2craft.pricing.transport import RequestsTransport
 from poe2craft.web.session import SessionStore
+
+if TYPE_CHECKING:
+    # Deferred to avoid a cycle: web.solve_status's router imports
+    # get_solve_status_tracker from this module.
+    from poe2craft.web.solve_status import SolveStatusTracker
 
 
 def get_gamedata(request: Request) -> GameData:
@@ -51,6 +57,10 @@ def get_trade_client(request: Request) -> TradeClient:
         request.app.state.trade_transport = transport
     settings: TradeSettingsStore = request.app.state.trade_settings
     return TradeClient(settings.current(), transport)
+
+
+def get_solve_status_tracker(request: Request) -> "SolveStatusTracker":
+    return request.app.state.solve_status
 
 
 def get_trade_stat_mapping(request: Request) -> dict:
